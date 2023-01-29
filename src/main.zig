@@ -69,10 +69,82 @@ const Interface = struct {
     name: []const u8,
 };
 const Field = struct {
+    accessor: cf.FieldInfo.AccessFlags,
     name: []const u8,
+    descriptor: []const u8,
+    value: ?[]const u8,
+    pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !Field {
+        var access = cf.FieldInfo.AccessFlags{};
+        var next = token_iterator.next();
+        while (next) |tok| : (next = token_iterator.next()) {
+            if (std.mem.eql(u8, tok, "public")) {
+                access.public = true;
+            } else if (std.mem.eql(u8, tok, "private")) {
+                access.private = true;
+            } else if (std.mem.eql(u8, tok, "protected")) {
+                access.protected = true;
+            } else if (std.mem.eql(u8, tok, "static")) {
+                access.static = true;
+            } else if (std.mem.eql(u8, tok, "final")) {
+                access.final = true;
+            } else if (std.mem.eql(u8, tok, "volatile")) {
+                access.@"volatile" = true;
+            } else if (std.mem.eql(u8, tok, "transient")) {
+                access.transient = true;
+            } else {
+                break;
+            }
+        }
+        var name = next orelse return error.UnexpectedEnd;
+        var descriptor = token_iterator.next() orelse return error.UnexpectedEnd;
+        var value: ?[]const u8 = if (token_iterator.peek()) |tok| value: {
+            if (!std.mem.eql(u8, tok, "=")) {
+                break :value null;
+            }
+            _ = token_iterator.next(); // skip the "="
+            break :value token_iterator.next();
+        } else null;
+        return Field{
+            .accessor = access,
+            .name = name,
+            .descriptor = descriptor,
+            .value = value,
+        };
+    }
 };
 const Method = struct {
+    accessor: cf.MethodInfo.AccessFlags,
     name: []const u8,
+    pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !Method {
+        var access = cf.MethodInfo.AccessFlags{};
+        var next = token_iterator.next();
+        while (next) |tok| : (next = token_iterator.next()) {
+            if (std.mem.eql(u8, tok, "public")) {
+                access.public = true;
+            } else if (std.mem.eql(u8, tok, "private")) {
+                access.private = true;
+            } else if (std.mem.eql(u8, tok, "protected")) {
+                access.protected = true;
+            } else if (std.mem.eql(u8, tok, "static")) {
+                access.static = true;
+            } else if (std.mem.eql(u8, tok, "final")) {
+                access.final = true;
+            } else if (std.mem.eql(u8, tok, "synchronized")) {
+                access.synchronized = true;
+            } else if (std.mem.eql(u8, tok, "native")) {
+                access.native = true;
+            } else if (std.mem.eql(u8, tok, "abstract")) {
+                access.abstract = true;
+            } else {
+                break;
+            }
+        }
+        var name = next orelse return error.UnexpectedEnd;
+        return Method{
+            .accessor = access,
+            .name = name,
+        };
+    }
 };
 
 const Parser = struct {
@@ -83,6 +155,7 @@ const Parser = struct {
     interfaces: std.ArrayListUnmanaged(Interface),
     fields: std.ArrayListUnmanaged(Field),
     methods: std.ArrayListUnmanaged(Method),
+    is_parsing_method: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Parser {
         return Parser{
@@ -109,8 +182,13 @@ const Parser = struct {
                     ';' => break :line, // Line is a comment, stop processing
                     '.' => try self.parseDirective(tok, &tok_iter),
                     else => {
-                        std.log.err("Found {s}", .{tok});
-                        return error.InvalidFile;
+                        if (tok[tok.len - 1] == ':' and self.is_parsing_method) {
+                            std.log.err("Found label {s}", .{tok});
+                            // TODO
+                        } else {
+                            std.log.err("Found {s}", .{tok});
+                            return error.InvalidFile;
+                        }
                     },
                 }
             }
@@ -137,6 +215,18 @@ const Parser = struct {
                 try self.interfaces.append(self.allocator, .{
                     .name = tok_iter.next() orelse return error.UnexpectedEnd,
                 });
+            },
+            .field => {
+                try self.fields.append(self.allocator, try Field.parse(tok_iter));
+            },
+            .method => {
+                try self.methods.append(self.allocator, try Method.parse(tok_iter));
+                self.is_parsing_method = true;
+            },
+            .end => {
+                var end_what = tok_iter.next() orelse return error.UnexpectedEnd;
+                std.debug.assert(std.mem.eql(u8, end_what, "method")); // TODO: is .end used for anything other than methods?
+                self.is_parsing_method = false;
             },
             else => {
                 std.debug.print("TODO: Unimplemented", .{});
@@ -211,6 +301,41 @@ test "interface" {
     try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
     try std.testing.expectEqualStrings("Edible", parser.interfaces.items[0].name);
     try std.testing.expectEqualStrings("java/lang/Throwable", parser.interfaces.items[1].name);
+}
+
+test "fields" {
+    const test_bytes =
+        \\.class foo
+        \\.super java/lang/Object
+        \\.field public bar I
+        \\.field public static final PI F = 3.14
+    ;
+    var parser = Parser.init(std.testing.allocator);
+    defer parser.deinit();
+
+    try parser.parse(test_bytes);
+
+    try std.testing.expectEqualStrings("foo", parser.class_name.?.token);
+    try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
+    try std.testing.expectEqualStrings("bar", parser.fields.items[0].name);
+    try std.testing.expectEqualStrings("PI", parser.fields.items[1].name);
+}
+
+test "methods" {
+    const test_bytes =
+        \\.class foo
+        \\.super java/lang/Object
+        \\.method abstract foo()V
+        \\.end method
+    ;
+    var parser = Parser.init(std.testing.allocator);
+    defer parser.deinit();
+
+    try parser.parse(test_bytes);
+
+    try std.testing.expectEqualStrings("foo", parser.class_name.?.token);
+    try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
+    try std.testing.expectEqualStrings("foo()V", parser.methods.items[0].name);
 }
 
 const Label = struct {
