@@ -36,11 +36,11 @@ const JasminFile = struct {
     methods: []Method,
 };
 
-const TokenWithAccessor = struct {
+const ClassName = struct {
     accessor: cf.ClassFile.AccessFlags,
     token: []const u8,
 
-    pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !TokenWithAccessor {
+    pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !ClassName {
         var access = cf.ClassFile.AccessFlags{};
         var next = token_iterator.next();
         while (next) |tok| : (next = token_iterator.next()) {
@@ -58,7 +58,7 @@ const TokenWithAccessor = struct {
                 break;
             }
         }
-        return TokenWithAccessor{
+        return ClassName{
             .accessor = access,
             .token = next orelse return error.UnexpectedEnd,
         };
@@ -78,8 +78,8 @@ const Method = struct {
 const Parser = struct {
     allocator: std.mem.Allocator,
     source: ?[]const u8 = null,
-    class_name: ?TokenWithAccessor = null,
-    super_class_name: ?TokenWithAccessor = null,
+    class_name: ?ClassName = null,
+    super_class_name: ?ClassName = null,
     interfaces: std.ArrayListUnmanaged(Interface),
     fields: std.ArrayListUnmanaged(Field),
     methods: std.ArrayListUnmanaged(Method),
@@ -123,11 +123,20 @@ const Parser = struct {
             .source => {
                 self.source = tok_iter.next() orelse return error.UnexpectedEnd;
             },
+            .interface => {
+                self.class_name = try ClassName.parse(tok_iter);
+                self.class_name.?.accessor.interface = true;
+            },
             .class => {
-                self.class_name = try TokenWithAccessor.parse(tok_iter);
+                self.class_name = try ClassName.parse(tok_iter);
             },
             .super => {
-                self.super_class_name = try TokenWithAccessor.parse(tok_iter);
+                self.super_class_name = try ClassName.parse(tok_iter);
+            },
+            .implements => {
+                try self.interfaces.append(self.allocator, .{
+                    .name = tok_iter.next() orelse return error.UnexpectedEnd,
+                });
             },
             else => {
                 std.debug.print("TODO: Unimplemented", .{});
@@ -184,6 +193,24 @@ test "comment" {
     try std.testing.expectEqualStrings("MyClass.j", parser.source.?);
     try std.testing.expectEqualStrings("MyClass", parser.class_name.?.token);
     try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
+}
+
+test "interface" {
+    const test_bytes =
+        \\.class foo
+        \\.super java/lang/Object
+        \\.implements Edible
+        \\.implements java/lang/Throwable
+    ;
+    var parser = Parser.init(std.testing.allocator);
+    defer parser.deinit();
+
+    try parser.parse(test_bytes);
+
+    try std.testing.expectEqualStrings("foo", parser.class_name.?.token);
+    try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
+    try std.testing.expectEqualStrings("Edible", parser.interfaces.items[0].name);
+    try std.testing.expectEqualStrings("java/lang/Throwable", parser.interfaces.items[1].name);
 }
 
 const Label = struct {
