@@ -117,6 +117,9 @@ const Field = struct {
 const Method = struct {
     accessor: cf.MethodInfo.AccessFlags,
     name: []const u8,
+    stack_limit: ?u16 = null,
+    instructions: std.ArrayListUnmanaged(Instruction),
+    labels: std.StringHashMapUnmanaged(usize),
     pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !Method {
         var access = cf.MethodInfo.AccessFlags{};
         var next = token_iterator.next();
@@ -145,7 +148,13 @@ const Method = struct {
         return Method{
             .accessor = access,
             .name = name,
+            .instructions = std.ArrayListUnmanaged(Instruction){},
+            .labels = std.StringHashMapUnmanaged(usize){},
         };
+    }
+    pub fn deinit(self: *Method, allocator: std.mem.Allocator) void {
+        self.instructions.clearAndFree(allocator);
+        self.labels.clearAndFree(allocator);
     }
 };
 
@@ -179,6 +188,9 @@ const Parser = struct {
     pub fn deinit(self: *Parser) void {
         self.interfaces.clearAndFree(self.allocator);
         self.fields.clearAndFree(self.allocator);
+        for (self.methods.items) |*method| {
+            method.deinit(self.allocator);
+        }
         self.methods.clearAndFree(self.allocator);
     }
 
@@ -247,12 +259,16 @@ const Parser = struct {
                     std.debug.print("Method directive used outside of method declaration\n", .{});
                     return error.UnexpectedMethodDirective;
                 }
+                std.debug.assert(self.methods.items.len > 0);
+                const method = &self.methods.items[self.methods.items.len - 1];
                 switch (directive_type) {
                     .limit => {
                         const what = tok_iter.next() orelse return error.UnexpectedEnd;
                         const limit = tok_iter.next() orelse return error.UnexpectedEnd;
                         std.debug.print("{s} limit set to {s}\n", .{ what, limit });
                         // TODO: is the stack limit part of the class file?
+                        std.debug.assert(std.mem.eql(u8, what, "stack"));
+                        method.stack_limit = try std.fmt.parseInt(u16, limit, 10);
                     },
                     .line,
                     .@"var",
@@ -268,28 +284,39 @@ const Parser = struct {
     }
 
     pub fn parseInstruction(self: *Parser, instruction: InstructionType, tok_iter: *std.mem.TokenIterator(u8)) !void {
-        _ = self;
+        std.debug.assert(self.methods.items.len > 0);
+        const method = &self.methods.items[self.methods.items.len - 1];
         switch (instruction) {
             .aload_0 => {
                 // No parameters required
+                try method.instructions.append(self.allocator, .aload_0);
             },
-            .@"return" => {},
+            .@"return" => {
+                try method.instructions.append(self.allocator, .@"return");
+            },
             .invokenonvirtual => {
-                const method = tok_iter.next() orelse return error.UnexpectedEnd;
-                std.debug.print("invoke nonvirtual method {s}\n", .{method});
+                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
+                // std.debug.print("invoke nonvirtual method {s}\n", .{method_name});
+                try method.instructions.append(self.allocator, .{ .invokenonvirtual = method_name });
             },
             .getstatic => {
                 const field = tok_iter.next() orelse return error.UnexpectedEnd;
                 const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
-                std.debug.print("get static {s}, {s}\n", .{ field, descriptor });
+                // std.debug.print("get static {s}, {s}\n", .{ field, descriptor });
+                try method.instructions.append(self.allocator, .{ .getstatic = .{
+                    .field_spec = field,
+                    .descriptor = descriptor,
+                } });
             },
             .ldc => {
                 const constant = tokenizeString(tok_iter) orelse return error.MissingString;
-                std.debug.print("ldc {s}\n", .{constant});
+                // std.debug.print("ldc {s}\n", .{constant});
+                try method.instructions.append(self.allocator, .{ .ldc = constant });
             },
             .invokevirtual => {
-                const method = tok_iter.next() orelse return error.UnexpectedEnd;
-                std.debug.print("invoke virtual method {s}\n", .{method});
+                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
+                // std.debug.print("invoke virtual method {s}\n", .{method_name});
+                try method.instructions.append(self.allocator, .{ .invokevirtual = method_name });
             },
             else => {
                 std.debug.print("Unimplemented instruction {}\n", .{instruction});
@@ -431,4 +458,16 @@ test "Hello World" {
     try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
     try std.testing.expectEqualStrings("<init>()V", parser.methods.items[0].name);
     try std.testing.expectEqualStrings("main([Ljava/lang/String;)V", parser.methods.items[1].name);
+
+    const init_method = parser.methods.items[0];
+    try std.testing.expectEqual(@as(InstructionType, .aload_0), init_method.instructions.items[0]);
+    try std.testing.expectEqual(@as(InstructionType, .invokenonvirtual), init_method.instructions.items[1]);
+    try std.testing.expectEqual(@as(InstructionType, .@"return"), init_method.instructions.items[2]);
+
+    const main_method = parser.methods.items[1];
+    try std.testing.expectEqual(@as(?u16, 2), main_method.stack_limit);
+    try std.testing.expectEqual(@as(InstructionType, .getstatic), main_method.instructions.items[0]);
+    try std.testing.expectEqual(@as(InstructionType, .ldc), main_method.instructions.items[1]);
+    try std.testing.expectEqual(@as(InstructionType, .invokevirtual), main_method.instructions.items[2]);
+    try std.testing.expectEqual(@as(InstructionType, .@"return"), main_method.instructions.items[3]);
 }

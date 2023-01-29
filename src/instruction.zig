@@ -44,21 +44,21 @@ pub const Instruction = union(InstructionType) {
     new,
 
     // method invocation
-    invokenonvirtual,
+    invokenonvirtual: []const u8,
     invokestatic,
-    invokevirtual,
+    invokevirtual: []const u8,
     invokeinterface,
 
     // field manipulation
     getfield,
-    getstatic,
+    getstatic: struct { field_spec: []const u8, descriptor: []const u8 },
     putfield,
     putstatic,
 
     newarray,
     multinewarray,
 
-    ldc,
+    ldc: []const u8,
     ldc_w,
 
     lookupswitch,
