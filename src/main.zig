@@ -1,5 +1,7 @@
 const std = @import("std");
 const cf = @import("cf");
+const Instruction = @import("instruction.zig").Instruction;
+const InstructionType = @import("instruction.zig").InstructionType;
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
@@ -147,6 +149,14 @@ const Method = struct {
     }
 };
 
+fn tokenizeString(tok_iter: *std.mem.TokenIterator(u8)) ?[]const u8 {
+    var tok = tok_iter.peek() orelse return null;
+    if (tok[0] != '"') return null;
+    var new_slice = std.mem.sliceTo(tok_iter.buffer[tok_iter.index + 1 ..], '"');
+    tok_iter.index += new_slice.len + 2;
+    return new_slice;
+}
+
 const Parser = struct {
     allocator: std.mem.Allocator,
     source: ?[]const u8 = null,
@@ -183,8 +193,11 @@ const Parser = struct {
                     '.' => try self.parseDirective(tok, &tok_iter),
                     else => {
                         if (tok[tok.len - 1] == ':' and self.is_parsing_method) {
-                            std.log.err("Found label {s}", .{tok});
+                            std.log.info("Found label {s}", .{tok});
                             // TODO
+                        } else if (std.meta.stringToEnum(InstructionType, tok)) |instruction| {
+                            std.log.info("Found instruction {}", .{instruction});
+                            try self.parseInstruction(instruction, &tok_iter);
                         } else {
                             std.log.err("Found {s}", .{tok});
                             return error.InvalidFile;
@@ -228,8 +241,58 @@ const Parser = struct {
                 std.debug.assert(std.mem.eql(u8, end_what, "method")); // TODO: is .end used for anything other than methods?
                 self.is_parsing_method = false;
             },
+            // Method directives
             else => {
-                std.debug.print("TODO: Unimplemented", .{});
+                if (!self.is_parsing_method) {
+                    std.debug.print("Method directive used outside of method declaration\n", .{});
+                    return error.UnexpectedMethodDirective;
+                }
+                switch (directive_type) {
+                    .limit => {
+                        const what = tok_iter.next() orelse return error.UnexpectedEnd;
+                        const limit = tok_iter.next() orelse return error.UnexpectedEnd;
+                        std.debug.print("{s} limit set to {s}\n", .{ what, limit });
+                        // TODO: is the stack limit part of the class file?
+                    },
+                    .line,
+                    .@"var",
+                    .throws,
+                    .@"catch",
+                    => {
+                        std.debug.print("TODO: Unimplemented\n", .{});
+                    },
+                    else => return error.UnexpectedGlobalDirective,
+                }
+            },
+        }
+    }
+
+    pub fn parseInstruction(self: *Parser, instruction: InstructionType, tok_iter: *std.mem.TokenIterator(u8)) !void {
+        _ = self;
+        switch (instruction) {
+            .aload_0 => {
+                // No parameters required
+            },
+            .@"return" => {},
+            .invokenonvirtual => {
+                const method = tok_iter.next() orelse return error.UnexpectedEnd;
+                std.debug.print("invoke nonvirtual method {s}\n", .{method});
+            },
+            .getstatic => {
+                const field = tok_iter.next() orelse return error.UnexpectedEnd;
+                const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
+                std.debug.print("get static {s}, {s}\n", .{ field, descriptor });
+            },
+            .ldc => {
+                const constant = tokenizeString(tok_iter) orelse return error.MissingString;
+                std.debug.print("ldc {s}\n", .{constant});
+            },
+            .invokevirtual => {
+                const method = tok_iter.next() orelse return error.UnexpectedEnd;
+                std.debug.print("invoke virtual method {s}\n", .{method});
+            },
+            else => {
+                std.debug.print("Unimplemented instruction {}\n", .{instruction});
             },
         }
     }
@@ -338,235 +401,34 @@ test "methods" {
     try std.testing.expectEqualStrings("foo()V", parser.methods.items[0].name);
 }
 
-const Label = struct {
-    name: []const u8,
-    pub fn decode(allocator: std.mem.Allocator, reader: anytype) !Label {
-        const token = try reader.readUntilDelimiterAlloc(allocator, '\n', 1024);
-        const name = std.mem.sliceTo(token, ':');
-        if (name.len >= token.len) return error.MissingColon;
-        return Label{
-            .name = name,
-        };
-    }
-    pub fn deinit(self: Label, allocator: std.mem.Allocator) void {
-        allocator.free(self.name);
-    }
-};
+test "Hello World" {
+    const test_bytes =
+        \\.class public HelloWorld
+        \\.super java/lang/Object
+        \\
+        \\; standard initializer (calls java.lang.Object's initializer)
+        \\.method public <init>()V
+        \\    aload_0
+        \\    invokenonvirtual java/lang/Object/<init>()V
+        \\    return
+        \\.end method
+        \\
+        \\; main() - prints out Hello World
+        \\.method public static main([Ljava/lang/String;)V
+        \\    .limit stack 2  ; up to two items can be pushed
+        \\    getstatic java/lang/System/out Ljava/io/PrintStream;
+        \\    ldc "Hello, World!"
+        \\    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+        \\    return
+        \\.end method
+    ;
+    var parser = Parser.init(std.testing.allocator);
+    defer parser.deinit();
 
-const Instructions = enum {
-    // local variables
-    ret,
-    aload,
-    astore,
-    dload,
-    dstore,
-    fload,
-    fstore,
-    iload,
-    istore,
-    lload,
-    lstore,
+    try parser.parse(test_bytes);
 
-    bipush,
-    sipish,
-    iinc,
-
-    // branching
-    goto,
-    goto_w,
-    if_acmpeq,
-    if_acmpne,
-    if_icmpeq,
-    if_icmpge,
-    if_icmpgt,
-    if_icmple,
-    if_icmplt,
-    if_icmpne,
-    ifeq,
-    ifge,
-    ifgt,
-    ifle,
-    iflt,
-    ifne,
-    ifnonnull,
-    ifnull,
-    jsr,
-    jsr_w,
-
-    // classes and objects
-    anewarray,
-    checkcast,
-    instanceof,
-    new,
-
-    // method invocation
-    invokenonvirtual,
-    invokestatic,
-    invokevirtual,
-    invokeinterface,
-
-    // field manipulation
-    getfield,
-    getstatic,
-    putfield,
-    putstatic,
-
-    newarray,
-    multinewarray,
-
-    ldc,
-    ldc_w,
-
-    lookupswitch,
-    tableswitch,
-
-    // Instructions with no parameters
-    aaload,
-    aastore,
-    aconst_null,
-    aload_0,
-    aload_1,
-    aload_2,
-    aload_3,
-    areturn,
-    arraylength,
-    astore_0,
-    astore_1,
-    astore_2,
-    astore_3,
-    athrow,
-    baload,
-    bastore,
-    breakpoint,
-    caload,
-    castore,
-    d2f,
-    d2i,
-    d2l,
-    dadd,
-    daload,
-    dastore,
-    dcmpg,
-    dcmpl,
-    dconst_0,
-    dconst_1,
-    ddiv,
-    dload_0,
-    dload_1,
-    dload_2,
-    dload_3,
-    dmul,
-    dneg,
-    drem,
-    dreturn,
-    dstore_0,
-    dstore_1,
-    dstore_2,
-    dstore_3,
-    dsub,
-    dup,
-    dup2,
-    dup2_x1,
-    dup2_x2,
-    dup_x1,
-    dup_x2,
-    f2d,
-    f2i,
-    f2l,
-    fadd,
-    faload,
-    fastore,
-    fcmpg,
-    fcmpl,
-    fconst_0,
-    fconst_1,
-    fconst_2,
-    fdiv,
-    fload_0,
-    fload_1,
-    fload_2,
-    fload_3,
-    fmul,
-    fneg,
-    frem,
-    freturn,
-    fstore_0,
-    fstore_1,
-    fstore_2,
-    fstore_3,
-    fsub,
-    i2d,
-    i2f,
-    i2l,
-    iadd,
-    iaload,
-    iand,
-    iastore,
-    iconst_0,
-    iconst_1,
-    iconst_2,
-    iconst_3,
-    iconst_4,
-    iconst_5,
-    iconst_m1,
-    idiv,
-    iload_0,
-    iload_1,
-    iload_2,
-    iload_3,
-    imul,
-    ineg,
-    int2byte,
-    int2char,
-    int2short,
-    ior,
-    irem,
-    ireturn,
-    ishl,
-    ishr,
-    istore_0,
-    istore_1,
-    istore_2,
-    istore_3,
-    isub,
-    iushr,
-    ixor,
-    l2d,
-    l2f,
-    l2i,
-    ladd,
-    laload,
-    land,
-    lastore,
-    lcmp,
-    lconst_0,
-    lconst_1,
-    ldiv,
-    lload_0,
-    lload_1,
-    lload_2,
-    lload_3,
-    lmul,
-    lneg,
-    lor,
-    lrem,
-    lreturn,
-    lshl,
-    lshr,
-    lstore_0,
-    lstore_1,
-    lstore_2,
-    lstore_3,
-    lsub,
-    lushr,
-    lxor,
-    monitorenter,
-    monitorexit,
-    nop,
-    pop,
-    pop2,
-    @"return",
-    saload,
-    sastore,
-    swap,
-};
+    try std.testing.expectEqualStrings("HelloWorld", parser.class_name.?.token);
+    try std.testing.expectEqualStrings("java/lang/Object", parser.super_class_name.?.token);
+    try std.testing.expectEqualStrings("<init>()V", parser.methods.items[0].name);
+    try std.testing.expectEqualStrings("main([Ljava/lang/String;)V", parser.methods.items[1].name);
+}
