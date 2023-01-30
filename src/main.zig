@@ -485,11 +485,10 @@ const Parser = struct {
                     .lstore,
                     => |instr| @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr))),
                     inline .anewarray,
+                    .invokespecial,
                     .invokestatic,
                     .invokevirtual,
                     => |instr| operation: {
-                        // TODO: create classinfo, refinfo, and nameandtypeinfo for each method/field
-                        // TODO: correctly route invokenonvirtual calls
                         const ref = try getMethodRef(constant_pool, @field(instruction, @tagName(instr)));
                         break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), ref);
                     },
@@ -541,7 +540,6 @@ const Parser = struct {
                         break :operation .{ .ldc_w = constant };
                     },
                     .lookupswitch, .tableswitch => unreachable,
-                    .invokenonvirtual => unreachable,
                     inline else => |instr| operation: {
                         // @compileLog(instr);
                         break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr)));
@@ -758,7 +756,7 @@ const Parser = struct {
                     .descriptor = descriptor,
                 }));
             },
-            inline .invokenonvirtual, .invokevirtual, .invokestatic => |instr| {
+            inline .invokespecial, .invokevirtual, .invokestatic => |instr| {
                 const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
                 try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), method_name));
             },
@@ -886,7 +884,7 @@ test "Hello World" {
         \\; standard initializer (calls java.lang.Object's initializer)
         \\.method public <init>()V
         \\    aload_0
-        \\    invokenonvirtual java/lang/Object/<init>()V
+        \\    invokespecial java/lang/Object/<init>()V
         \\    return
         \\.end method
         \\
@@ -911,7 +909,7 @@ test "Hello World" {
 
     const init_method = parser.methods.items[0];
     try std.testing.expectEqual(@as(InstructionType, .aload_0), init_method.instructions.items[0]);
-    try std.testing.expectEqual(@as(InstructionType, .invokenonvirtual), init_method.instructions.items[1]);
+    try std.testing.expectEqual(@as(InstructionType, .invokespecial), init_method.instructions.items[1]);
     try std.testing.expectEqual(@as(InstructionType, .@"return"), init_method.instructions.items[2]);
 
     const main_method = parser.methods.items[1];

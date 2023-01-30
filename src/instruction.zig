@@ -44,7 +44,7 @@ pub const Instruction = union(InstructionType) {
     new: []const u8,
 
     // method invocation
-    invokenonvirtual: []const u8,
+    invokespecial: []const u8,
     invokestatic: []const u8,
     invokevirtual: []const u8,
     invokeinterface: struct { method_spec: []const u8, arg_count: u8 },
@@ -262,7 +262,7 @@ pub const InstructionType = enum {
     new,
 
     // method invocation
-    invokenonvirtual,
+    invokespecial,
     invokestatic,
     invokevirtual,
     invokeinterface,
