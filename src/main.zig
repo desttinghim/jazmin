@@ -242,15 +242,14 @@ const Parser = struct {
                 std.debug.assert(std.mem.eql(u8, end_what, "method")); // TODO: is .end used for anything other than methods?
                 self.is_parsing_method = false;
             },
-            // Method directives
-            else => {
+            inline .limit, .line, .@"var", .throws, .@"catch" => |method_directive| {
                 if (!self.is_parsing_method) {
                     std.debug.print("Method directive used outside of method declaration\n", .{});
                     return error.UnexpectedMethodDirective;
                 }
                 std.debug.assert(self.methods.items.len > 0);
                 const method = &self.methods.items[self.methods.items.len - 1];
-                switch (directive_type) {
+                switch (method_directive) {
                     .limit => {
                         const what = tok_iter.next() orelse return error.UnexpectedEnd;
                         const limit = tok_iter.next() orelse return error.UnexpectedEnd;
@@ -266,7 +265,7 @@ const Parser = struct {
                     => {
                         std.debug.print("TODO: Unimplemented\n", .{});
                     },
-                    else => return error.UnexpectedGlobalDirective,
+                    inline else => @compileError("Switch on method directives produced non-method directive"),
                 }
             },
         }
