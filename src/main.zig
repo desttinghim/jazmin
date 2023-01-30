@@ -107,8 +107,9 @@ const Method = struct {
     accessor: cf.MethodInfo.AccessFlags,
     name: []const u8,
     stack_limit: ?u16 = null,
+    local_limit: ?u16 = null,
     instructions: std.ArrayListUnmanaged(Instruction),
-    labels: std.StringHashMapUnmanaged(usize),
+    labels: std.StringHashMapUnmanaged(i32),
     pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !Method {
         var access = cf.MethodInfo.AccessFlags{};
         var next = token_iterator.next();
@@ -138,7 +139,7 @@ const Method = struct {
             .accessor = access,
             .name = name,
             .instructions = std.ArrayListUnmanaged(Instruction){},
-            .labels = std.StringHashMapUnmanaged(usize){},
+            .labels = std.StringHashMapUnmanaged(i32){},
         };
     }
     pub fn deinit(self: *Method, allocator: std.mem.Allocator) void {
@@ -264,14 +265,82 @@ const Parser = struct {
             });
         }
 
-        // TODO: loop over methods and create MethodInfo structs
+        // loop over methods and create MethodInfo structs
         for (self.methods.items) |method| {
             const name_bytes = std.mem.sliceTo(method.name, '(');
             const descriptor_bytes = method.name[name_bytes.len..];
             const name_index = try addStringToConstantPool(constant_pool, name_bytes);
             const descriptor_index = try addStringToConstantPool(constant_pool, descriptor_bytes);
+
+            // Convert bytecode
+            var code = std.ArrayList(u8).init(allocator);
+            const code_writer = code.writer();
+            for (method.instructions.items) |instruction| {
+                var operation = switch (@as(InstructionType, instruction)) {
+                    .bipush => .{ .bipush = instruction.bipush },
+                    .sipush => .{ .sipush = instruction.sipush },
+                    .iinc => .{ .iinc = instruction.iinc },
+                    inline .goto,
+                    .if_acmpeq,
+                    .if_acmpne,
+                    .if_icmpeq,
+                    .if_icmpge,
+                    .if_icmpgt,
+                    .if_icmple,
+                    .if_icmplt,
+                    .if_icmpne,
+                    .ifeq,
+                    .ifge,
+                    .ifgt,
+                    .ifle,
+                    .iflt,
+                    .ifne,
+                    .ifnonnull,
+                    .ifnull,
+                    .jsr,
+                    => |instr| operation: {
+                        const string = @field(instruction, @tagName(instr));
+                        const offset = std.fmt.parseInt(i16, string, 10) catch @intCast(i16, method.labels.get(string) orelse return error.UnknownLabel);
+                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), offset);
+                    },
+                    inline .goto_w, .jsr_w => |instr| operation: {
+                        const string = @field(instruction, @tagName(instr));
+                        const offset = std.fmt.parseInt(i32, string, 10) catch method.labels.get(string) orelse return error.UnknownLabel;
+                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), offset);
+                    },
+                    inline .aload,
+                    .astore,
+                    .dload,
+                    .dstore,
+                    .fload,
+                    .fstore,
+                    .iload,
+                    .istore,
+                    .lload,
+                    .lstore,
+                    => |instr| @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr))),
+                    inline else => |instr| @unionInit(cf.bytecode.ops.Operation, @tagName(instr), {}),
+                };
+                _ = operation;
+                instruction.encode(code_writer);
+            }
+            var exception_table = std.ArrayListUnmanaged(cf.attributes.ExceptionTableEntry){};
+            var code_attributes = std.ArrayListUnmanaged(cf.attributes.AttributeInfo){};
+
+            var code_attribute = cf.attributes.CodeAttribute{
+                .allocator = allocator,
+                .constant_pool = constant_pool,
+                .max_stack = method.stack_limit orelse 0,
+                .max_locals = method.local_limit orelse 0,
+                .code = code,
+                .exception_table = exception_table,
+                .attributes = code_attributes,
+            };
+
             // TODO: method attributes
             var method_attributes = std.ArrayList(cf.attributes.AttributeInfo).init(allocator);
+            try method_attributes.append(.{ .code = code_attribute });
+
             try methods.append(.{
                 .constant_pool = constant_pool,
                 .access_flags = method.accessor,
@@ -313,7 +382,13 @@ const Parser = struct {
                     else => {
                         if (tok[tok.len - 1] == ':' and self.is_parsing_method) {
                             std.log.info("Found label {s}", .{tok});
-                            // TODO
+                            if (!self.is_parsing_method) {
+                                std.debug.print("Method directive used outside of method declaration\n", .{});
+                                return error.UnexpectedMethodDirective;
+                            }
+                            std.debug.assert(self.methods.items.len > 0);
+                            const method = &self.methods.items[self.methods.items.len - 1];
+                            try method.labels.put(self.allocator, tok[0 .. tok.len - 1], @intCast(i32, method.instructions.items.len));
                         } else if (std.meta.stringToEnum(InstructionType, tok)) |instruction| {
                             std.log.info("Found instruction {}", .{instruction});
                             try self.parseInstruction(instruction, &tok_iter);
@@ -372,10 +447,14 @@ const Parser = struct {
                     .limit => {
                         const what = tok_iter.next() orelse return error.UnexpectedEnd;
                         const limit = tok_iter.next() orelse return error.UnexpectedEnd;
+                        if (std.mem.eql(u8, what, "stack")) {
+                            method.stack_limit = try std.fmt.parseInt(u16, limit, 10);
+                        } else if (std.mem.eql(u8, what, "local")) {
+                            method.local_limit = try std.fmt.parseInt(u16, limit, 10);
+                        } else {
+                            return error.InvalidLimit;
+                        }
                         std.debug.print("{s} limit set to {s}\n", .{ what, limit });
-                        // TODO: is the stack limit part of the class file?
-                        std.debug.assert(std.mem.eql(u8, what, "stack"));
-                        method.stack_limit = try std.fmt.parseInt(u16, limit, 10);
                     },
                     .line,
                     .@"var",
@@ -426,16 +505,21 @@ const Parser = struct {
                     .num_dimensions = index,
                 } });
             },
+            .bipush => {
+                const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const int = try std.fmt.parseInt(i8, int_str, 10);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, "bipush", int));
+            },
+            .sipush => {
+                const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const int = try std.fmt.parseInt(i16, int_str, 10);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, "sipush", int));
+            },
             inline .anewarray, .checkcast, .instanceof, .new, .newarray => |instr| {
                 // .newarray technically takes a type and not a class, but both are strings in this case.
                 // TODO: parse type passed to newarray
                 const class_name = tok_iter.next() orelse return error.UnexpectedEnd;
                 try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), class_name));
-            },
-            inline .bipush, .sipush => |instr| {
-                const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const int = try std.fmt.parseInt(i32, int_str, 10);
-                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), int));
             },
             inline .goto, .goto_w, .if_acmpeq, .if_acmpne, .if_icmpeq, .if_icmpge, .if_icmpgt, .if_icmple, .if_icmplt, .if_icmpne, .ifeq, .ifge, .ifgt, .ifle, .iflt, .ifne, .ifnonnull, .ifnull, .jsr, .jsr_w => |instr| {
                 const label = tok_iter.next() orelse return error.UnexpectedEnd;

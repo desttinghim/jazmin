@@ -11,8 +11,8 @@ pub const Instruction = union(InstructionType) {
     lload: u8,
     lstore: u8,
 
-    bipush: i32,
-    sipush: i32,
+    bipush: i8,
+    sipush: i16,
     iinc: struct { var_num: u8, amount: i32 },
 
     // branching
