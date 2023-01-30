@@ -304,60 +304,12 @@ const Parser = struct {
                 const constant = tokenizeString(tok_iter) orelse return error.MissingString;
                 try method.instructions.append(self.allocator, .{ .ldc = constant });
             },
-            .ret => {
+            inline .ret, .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
                 const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .ret = index });
-            },
-            .aload => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .aload = index });
-            },
-            .astore => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .astore = index });
-            },
-            .dload => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .dload = index });
-            },
-            .dstore => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .dstore = index });
-            },
-            .fload => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .fload = index });
-            },
-            .fstore => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .fstore = index });
-            },
-            .iload => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .iload = index });
-            },
-            .istore => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .istore = index });
-            },
-            .lload => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .lload = index });
-            },
-            .lstore => {
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
-                try method.instructions.append(self.allocator, .{ .lstore = index });
+                var T: Instruction = undefined;
+                @field(T, @tagName(instr)) = index;
+                try method.instructions.append(self.allocator, T);
             },
             inline else => |instr| {
                 try method.instructions.append(self.allocator, @as(Instruction, instr));
