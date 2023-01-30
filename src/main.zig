@@ -275,21 +275,49 @@ const Parser = struct {
         std.debug.assert(self.methods.items.len > 0);
         const method = &self.methods.items[self.methods.items.len - 1];
         switch (instruction) {
-            inline .invokenonvirtual, .invokevirtual, .invokestatic, .invokeinterface => |instr| {
+            .invokeinterface => {
                 const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), method_name));
-            },
-            .getstatic => {
-                const field = tok_iter.next() orelse return error.UnexpectedEnd;
-                const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, .{ .getstatic = .{
-                    .field_spec = field,
-                    .descriptor = descriptor,
+                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const index = try std.fmt.parseInt(u8, index_str, 10);
+                try method.instructions.append(self.allocator, .{ .invokeinterface = .{
+                    .method_spec = method_name,
+                    .arg_count = index,
                 } });
             },
             .ldc => {
                 const constant = tokenizeString(tok_iter) orelse return error.MissingString;
                 try method.instructions.append(self.allocator, .{ .ldc = constant });
+            },
+            .iinc => {
+                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const index = try std.fmt.parseInt(u8, index_str, 10);
+                const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const int = try std.fmt.parseInt(i32, int_str, 10);
+                try method.instructions.append(self.allocator, .{ .iinc = .{
+                    .var_num = index,
+                    .amount = int,
+                } });
+            },
+            inline .bipush, .sipush => |instr| {
+                const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const int = try std.fmt.parseInt(i32, int_str, 10);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), int));
+            },
+            inline .goto, .goto_w, .if_acmpeq, .if_acmpne, .if_icmpeq, .if_icmpge, .if_icmpgt, .if_icmple, .if_icmplt, .if_icmpne, .ifeq, .ifge, .ifgt, .ifle, .iflt, .ifne, .ifnonnull, .ifnull, .jsr, .jsr_w => |instr| {
+                const label = tok_iter.next() orelse return error.UnexpectedEnd;
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), label));
+            },
+            inline .getfield, .getstatic, .putfield, .putstatic => |instr| {
+                const field = tok_iter.next() orelse return error.UnexpectedEnd;
+                const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), .{
+                    .field_spec = field,
+                    .descriptor = descriptor,
+                }));
+            },
+            inline .invokenonvirtual, .invokevirtual, .invokestatic => |instr| {
+                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), method_name));
             },
             inline .ret, .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
                 const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
