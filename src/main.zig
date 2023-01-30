@@ -339,6 +339,32 @@ const Parser = struct {
         return ref_info_index;
     }
 
+    fn getClassRef(constant_pool: *cf.ConstantPool, class_name: []const u8) !u16 {
+        var class_name_index = try addStringToConstantPool(constant_pool, class_name);
+
+        var class_index_opt: ?u16 = null;
+
+        for (constant_pool.entries.items) |constant, i| {
+            switch (constant) {
+                .class => |class_data| {
+                    if (class_data.name_index == class_name_index) {
+                        class_index_opt = @intCast(u16, i);
+                    }
+                },
+                else => continue,
+            }
+        }
+
+        const class_index = class_index_opt orelse class_index: {
+            break :class_index try addToConstantPool(constant_pool, .class, .{
+                .constant_pool = constant_pool,
+                .name_index = class_name_index,
+            });
+        };
+
+        return class_index;
+    }
+
     fn toClassFile(self: *Parser, allocator: std.mem.Allocator) !cf.ClassFile {
         if (!self.has_parsed) return error.ParsingNotComplete;
 
@@ -472,6 +498,14 @@ const Parser = struct {
                         const field = @field(instruction, @tagName(instr));
                         break :operation try getFieldRef(constant_pool, field.field_spec, field.descriptor);
                     },
+                    inline .checkcast,
+                    .instanceof,
+                    .new,
+                    => |instr| operation: {
+                        const class = @field(instruction, @tagName(instr));
+                        break :operation try getClassRef(constant_pool, class);
+                    },
+                    // .ldc_w,
                     inline else => |instr| operation: {
                         @compileLog(instr);
                         break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr)));
