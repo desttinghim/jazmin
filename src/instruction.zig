@@ -38,10 +38,10 @@ pub const Instruction = union(InstructionType) {
     jsr_w: []const u8,
 
     // classes and objects
-    anewarray,
-    checkcast,
-    instanceof,
-    new,
+    anewarray: []const u8,
+    checkcast: []const u8,
+    instanceof: []const u8,
+    new: []const u8,
 
     // method invocation
     invokenonvirtual: []const u8,
@@ -55,8 +55,8 @@ pub const Instruction = union(InstructionType) {
     putfield: struct { field_spec: []const u8, descriptor: []const u8 },
     putstatic: struct { field_spec: []const u8, descriptor: []const u8 },
 
-    newarray,
-    multinewarray,
+    newarray: []const u8,
+    multinewarray: struct { descriptor: []const u8, num_dimensions: u16 },
 
     ldc: []const u8,
     ldc_w,

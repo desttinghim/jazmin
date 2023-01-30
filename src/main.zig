@@ -285,7 +285,7 @@ const Parser = struct {
                 } });
             },
             .ldc => {
-                const constant = tokenizeString(tok_iter) orelse return error.MissingString;
+                const constant = tokenizeString(tok_iter) orelse tok_iter.next() orelse return error.UnexpectedEnd;
                 try method.instructions.append(self.allocator, .{ .ldc = constant });
             },
             .iinc => {
@@ -297,6 +297,21 @@ const Parser = struct {
                     .var_num = index,
                     .amount = int,
                 } });
+            },
+            .multinewarray => {
+                const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
+                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const index = try std.fmt.parseInt(u8, index_str, 10);
+                try method.instructions.append(self.allocator, .{ .multinewarray = .{
+                    .descriptor = descriptor,
+                    .num_dimensions = index,
+                } });
+            },
+            inline .anewarray, .checkcast, .instanceof, .new, .newarray => |instr| {
+                // .newarray technically takes a type and not a class, but both are strings in this case.
+                // TODO: parse type passed to newarray
+                const class_name = tok_iter.next() orelse return error.UnexpectedEnd;
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), class_name));
             },
             inline .bipush, .sipush => |instr| {
                 const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
