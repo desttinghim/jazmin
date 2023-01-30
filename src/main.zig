@@ -505,6 +505,15 @@ const Parser = struct {
                         const class = @field(instruction, @tagName(instr));
                         break :operation try getClassRef(constant_pool, class);
                     },
+                    .invokeinterface => operation: {
+                        const class = try getClassRef(constant_pool, instruction.invokeinterface.method_spec);
+                        break :operation .{ .invokeinterface = .{
+                            .indexbyte1 = @truncate(u8, class >> 8),
+                            .indexbyte2 = @truncate(u8, class),
+                            .count = instruction.invokeinterface.arg_count,
+                            .pad = 0,
+                        } };
+                    },
                     // .ldc_w,
                     inline else => |instr| operation: {
                         @compileLog(instr);
