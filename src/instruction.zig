@@ -45,9 +45,9 @@ pub const Instruction = union(InstructionType) {
 
     // method invocation
     invokenonvirtual: []const u8,
-    invokestatic,
+    invokestatic: []const u8,
     invokevirtual: []const u8,
-    invokeinterface,
+    invokeinterface: []const u8,
 
     // field manipulation
     getfield,
