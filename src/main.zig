@@ -156,7 +156,6 @@ fn tokenizeString(tok_iter: *std.mem.TokenIterator(u8)) ?[]const u8 {
 }
 
 const Parser = struct {
-    has_parsed: bool,
     allocator: std.mem.Allocator,
     source: ?[]const u8 = null,
     class_name: ?ClassName = null,
@@ -165,6 +164,7 @@ const Parser = struct {
     fields: std.ArrayListUnmanaged(Field),
     methods: std.ArrayListUnmanaged(Method),
     is_parsing_method: bool = false,
+    has_parsed: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Parser {
         return Parser{
@@ -182,6 +182,119 @@ const Parser = struct {
             method.deinit(self.allocator);
         }
         self.methods.clearAndFree(self.allocator);
+    }
+
+    fn addStringToConstantPool(constant_pool: *cf.ConstantPool, string: []const u8) !u16 {
+        var get_or_put = try constant_pool.utf8_entries_map.getOrPut(constant_pool.allocator, string);
+        if (!get_or_put.found_existing) {
+            get_or_put.value_ptr.* = @intCast(u16, constant_pool.entries.items.len + 1);
+            const bytes = try constant_pool.allocator.dupe(u8, string);
+            try constant_pool.entries.append(constant_pool.allocator, .{ .utf8 = .{
+                .constant_pool = constant_pool,
+                .bytes = bytes,
+            } });
+        }
+        return @intCast(u16, constant_pool.entries.items.len);
+    }
+
+    fn addToConstantPool(constant_pool: *cf.ConstantPool, comptime T: cf.ConstantPool.Tag, data: anytype) !u16 {
+        try constant_pool.entries.append(constant_pool.allocator, @unionInit(cf.ConstantPool.Entry, @tagName(T), data));
+        return @intCast(u16, constant_pool.entries.items.len);
+    }
+
+    fn toClassFile(self: *Parser, allocator: std.mem.Allocator) !cf.ClassFile {
+        if (!self.has_parsed) return error.ParsingNotComplete;
+
+        // Initialize variables needed for ClassFile struct
+        const constant_pool_len_estimate = @intCast(u16, (2 + self.methods.items.len + self.fields.items.len) * 3);
+        var constant_pool = try cf.ConstantPool.init(allocator, constant_pool_len_estimate);
+        var interfaces = std.ArrayList(u16).init(allocator);
+        var fields = std.ArrayList(cf.FieldInfo).init(allocator);
+        var methods = std.ArrayList(cf.MethodInfo).init(allocator);
+        var attributes = std.ArrayList(cf.attributes.AttributeInfo).init(allocator);
+
+        // add class name to constant pool
+        const class_name_index = try addStringToConstantPool(constant_pool, self.class_name.?.token);
+        const class_index = try addToConstantPool(constant_pool, .class, .{
+            .constant_pool = constant_pool,
+            .name_index = class_name_index,
+        });
+
+        // add superclass name to constant pool
+        const super_class_index = if (self.super_class_name) |super_class_name| super_class: {
+            const super_class_name_index = try addStringToConstantPool(constant_pool, super_class_name.token);
+            const super_class_index = try addToConstantPool(constant_pool, .class, .{
+                .constant_pool = constant_pool,
+                .name_index = super_class_name_index,
+            });
+            break :super_class super_class_index;
+        } else null;
+
+        // add source to constant pool
+        const source = self.source orelse return error.MissingSourceName;
+        const source_index = try addStringToConstantPool(constant_pool, source);
+        try attributes.append(.{ .source_file = .{
+            .allocator = allocator,
+            .constant_pool = constant_pool,
+            .source_file_index = source_index,
+        } });
+
+        // loop over interfaces and insert into the constant pool
+        for (self.interfaces.items) |interface| {
+            const name_index = try addStringToConstantPool(constant_pool, interface.name);
+            const index = try addToConstantPool(constant_pool, .class, .{
+                .constant_pool = constant_pool,
+                .name_index = name_index,
+            });
+            try interfaces.append(index);
+        }
+
+        // loop over fields and create FieldInfo structs
+        for (self.fields.items) |field| {
+            const name_index = try addStringToConstantPool(constant_pool, field.name);
+            const descriptor_index = try addStringToConstantPool(constant_pool, field.descriptor);
+            // TODO: field attributes
+            var field_attributes = std.ArrayList(cf.attributes.AttributeInfo).init(allocator);
+            try fields.append(.{
+                .constant_pool = constant_pool,
+                .access_flags = field.accessor,
+                .name_index = name_index,
+                .descriptor_index = descriptor_index,
+                .attributes = field_attributes,
+            });
+        }
+
+        // TODO: loop over methods and create MethodInfo structs
+        for (self.methods.items) |method| {
+            const name_bytes = std.mem.sliceTo(method.name, '(');
+            const descriptor_bytes = method.name[name_bytes.len..];
+            const name_index = try addStringToConstantPool(constant_pool, name_bytes);
+            const descriptor_index = try addStringToConstantPool(constant_pool, descriptor_bytes);
+            // TODO: method attributes
+            var method_attributes = std.ArrayList(cf.attributes.AttributeInfo).init(allocator);
+            try methods.append(.{
+                .constant_pool = constant_pool,
+                .access_flags = method.accessor,
+                .name_index = name_index,
+                .descriptor_index = descriptor_index,
+                .attributes = method_attributes,
+            });
+        }
+
+        // TODO: add attributes?
+        var class = cf.ClassFile{
+            .minor_version = 0,
+            .major_version = 0,
+            .constant_pool = constant_pool,
+            .access_flags = self.class_name.?.accessor,
+            .this_class = class_index,
+            .super_class = super_class_index,
+            .interfaces = interfaces,
+            .fields = fields,
+            .methods = methods,
+            .attributes = attributes,
+        };
+        return class;
     }
 
     pub fn setSource(self: *Parser, name: []const u8) void {
@@ -497,4 +610,8 @@ test "Hello World" {
     try std.testing.expectEqual(@as(InstructionType, .ldc), main_method.instructions.items[1]);
     try std.testing.expectEqual(@as(InstructionType, .invokevirtual), main_method.instructions.items[2]);
     try std.testing.expectEqual(@as(InstructionType, .@"return"), main_method.instructions.items[3]);
+
+    parser.setSource("HelloWorld.j");
+    var class = try parser.toClassFile(std.testing.allocator);
+    defer class.deinit();
 }
