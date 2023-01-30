@@ -276,21 +276,9 @@ const Parser = struct {
         std.debug.assert(self.methods.items.len > 0);
         const method = &self.methods.items[self.methods.items.len - 1];
         switch (instruction) {
-            .invokenonvirtual => {
+            inline .invokenonvirtual, .invokevirtual, .invokestatic, .invokeinterface => |instr| {
                 const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, .{ .invokenonvirtual = method_name });
-            },
-            .invokevirtual => {
-                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, .{ .invokevirtual = method_name });
-            },
-            .invokestatic => {
-                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, .{ .invokestatic = method_name });
-            },
-            .invokeinterface => {
-                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, .{ .invokeinterface = method_name });
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), method_name));
             },
             .getstatic => {
                 const field = tok_iter.next() orelse return error.UnexpectedEnd;
@@ -307,9 +295,7 @@ const Parser = struct {
             inline .ret, .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
                 const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const index = try std.fmt.parseInt(u8, index_str, 10);
-                var T: Instruction = undefined;
-                @field(T, @tagName(instr)) = index;
-                try method.instructions.append(self.allocator, T);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), index));
             },
             inline else => |instr| {
                 try method.instructions.append(self.allocator, @as(Instruction, instr));
