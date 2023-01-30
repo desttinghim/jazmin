@@ -13,7 +13,7 @@ pub const Instruction = union(InstructionType) {
 
     bipush: i8,
     sipush: i16,
-    iinc: struct { var_num: u8, amount: i32 },
+    iinc: struct { var_num: u16, amount: i16 },
 
     // branching
     goto: []const u8,
@@ -47,7 +47,7 @@ pub const Instruction = union(InstructionType) {
     invokenonvirtual: []const u8,
     invokestatic: []const u8,
     invokevirtual: []const u8,
-    invokeinterface: struct { method_spec: []const u8, arg_count: u16 },
+    invokeinterface: struct { method_spec: []const u8, arg_count: u8 },
 
     // field manipulation
     getfield: struct { field_spec: []const u8, descriptor: []const u8 },
@@ -56,7 +56,7 @@ pub const Instruction = union(InstructionType) {
     putstatic: struct { field_spec: []const u8, descriptor: []const u8 },
 
     newarray: []const u8,
-    multinewarray: struct { descriptor: []const u8, num_dimensions: u16 },
+    multianewarray: struct { descriptor: []const u8, num_dimensions: u8 },
 
     ldc: []const u8,
     ldc_w,
@@ -160,9 +160,9 @@ pub const Instruction = union(InstructionType) {
     iload_3,
     imul,
     ineg,
-    int2byte,
-    int2char,
-    int2short,
+    // int2byte,
+    // int2char,
+    // int2short,
     ior,
     irem,
     ireturn,
@@ -274,7 +274,7 @@ pub const InstructionType = enum {
     putstatic,
 
     newarray,
-    multinewarray,
+    multianewarray,
 
     ldc,
     ldc_w,
@@ -378,9 +378,9 @@ pub const InstructionType = enum {
     iload_3,
     imul,
     ineg,
-    int2byte,
-    int2char,
-    int2short,
+    // int2byte,
+    // int2char,
+    // int2short,
     ior,
     irem,
     ireturn,
