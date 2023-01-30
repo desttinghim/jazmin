@@ -187,25 +187,30 @@ const Parser = struct {
 
     fn addStringToConstantPool(constant_pool: *cf.ConstantPool, string: []const u8) !u16 {
         var get_or_put = try constant_pool.utf8_entries_map.getOrPut(constant_pool.allocator, string);
-        if (!get_or_put.found_existing) {
+        const index = if (!get_or_put.found_existing) index: {
             get_or_put.value_ptr.* = @intCast(u16, constant_pool.entries.items.len + 1);
             const bytes = try constant_pool.allocator.dupe(u8, string);
             try constant_pool.entries.append(constant_pool.allocator, .{ .utf8 = .{
                 .constant_pool = constant_pool,
                 .bytes = bytes,
             } });
-        }
-        return @intCast(u16, constant_pool.entries.items.len);
+            break :index @intCast(u16, constant_pool.entries.items.len);
+        } else get_or_put.value_ptr.*;
+        std.log.err("String \"{s}\" has index {}", .{ string, index });
+        return index;
     }
 
     fn addToConstantPool(constant_pool: *cf.ConstantPool, comptime T: cf.ConstantPool.Tag, data: anytype) !u16 {
         try constant_pool.entries.append(constant_pool.allocator, @unionInit(cf.ConstantPool.Entry, @tagName(T), data));
+        std.log.err("{s} constant has index {}", .{ @tagName(T), constant_pool.entries.items.len });
         return @intCast(u16, constant_pool.entries.items.len);
     }
 
     fn getMethodRef(constant_pool: *cf.ConstantPool, method_name: []const u8) !u16 {
-        var slash_index = std.mem.lastIndexOfScalar(u8, method_name, '/') orelse return error.MalformedName;
+        std.log.err("{s}, {}/{}", .{ method_name, constant_pool.entries.items.len, constant_pool.entries.capacity });
         var paren_index = std.mem.indexOfScalar(u8, method_name, '(') orelse return error.MalformedName;
+        const class_and_function = method_name[0..paren_index];
+        var slash_index = std.mem.lastIndexOfScalar(u8, class_and_function, '/') orelse return error.MalformedName;
         var class = method_name[0..slash_index];
         var name = method_name[slash_index..paren_index];
         var descriptor = method_name[paren_index..];
@@ -217,7 +222,9 @@ const Parser = struct {
         var class_index_opt: ?u16 = null;
         var name_and_type_index_opt: ?u16 = null;
 
+        std.log.err("{*}, {}/{}", .{ constant_pool.entries.items, constant_pool.entries.items.len, constant_pool.entries.capacity });
         for (constant_pool.entries.items) |constant, i| {
+            std.log.err("constant {}", .{i});
             switch (constant) {
                 .class => |class_data| {
                     if (class_data.name_index == class_name_index) {
@@ -369,8 +376,7 @@ const Parser = struct {
         if (!self.has_parsed) return error.ParsingNotComplete;
 
         // Initialize variables needed for ClassFile struct
-        const constant_pool_len_estimate = @intCast(u16, (2 + self.methods.items.len + self.fields.items.len) * 3);
-        var constant_pool = try cf.ConstantPool.init(allocator, constant_pool_len_estimate);
+        var constant_pool = try cf.ConstantPool.init(allocator, 0);
         var interfaces = std.ArrayList(u16).init(allocator);
         var fields = std.ArrayList(cf.FieldInfo).init(allocator);
         var methods = std.ArrayList(cf.MethodInfo).init(allocator);
