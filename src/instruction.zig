@@ -1,5 +1,5 @@
 pub const Instruction = union(InstructionType) {
-    ret: u8,
+    ret, //: u8,
     aload: u8,
     astore: u8,
     dload: u8,

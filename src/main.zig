@@ -203,6 +203,142 @@ const Parser = struct {
         return @intCast(u16, constant_pool.entries.items.len);
     }
 
+    fn getMethodRef(constant_pool: *cf.ConstantPool, method_name: []const u8) !u16 {
+        var slash_index = std.mem.lastIndexOfScalar(u8, method_name, '/') orelse return error.MalformedName;
+        var paren_index = std.mem.indexOfScalar(u8, method_name, '(') orelse return error.MalformedName;
+        var class = method_name[0..slash_index];
+        var name = method_name[slash_index..paren_index];
+        var descriptor = method_name[paren_index..];
+
+        var class_name_index = try addStringToConstantPool(constant_pool, class);
+        var method_name_index = try addStringToConstantPool(constant_pool, name);
+        var descriptor_index = try addStringToConstantPool(constant_pool, descriptor);
+
+        var class_index_opt: ?u16 = null;
+        var name_and_type_index_opt: ?u16 = null;
+
+        for (constant_pool.entries.items) |constant, i| {
+            switch (constant) {
+                .class => |class_data| {
+                    if (class_data.name_index == class_name_index) {
+                        class_index_opt = @intCast(u16, i);
+                    }
+                },
+                .name_and_type => |name_and_type| {
+                    if (name_and_type.name_index == method_name_index and name_and_type.descriptor_index == descriptor_index) {
+                        name_and_type_index_opt = @intCast(u16, i);
+                    }
+                },
+                else => continue,
+            }
+        }
+
+        const class_index = class_index_opt orelse class_index: {
+            break :class_index try addToConstantPool(constant_pool, .class, .{
+                .constant_pool = constant_pool,
+                .name_index = class_name_index,
+            });
+        };
+
+        const name_and_type_index = name_and_type_index_opt orelse name_and_type_index: {
+            break :name_and_type_index try addToConstantPool(constant_pool, .name_and_type, .{
+                .constant_pool = constant_pool,
+                .name_index = class_name_index,
+                .descriptor_index = descriptor_index,
+            });
+        };
+
+        var ref_info_index_opt: ?u16 = null;
+        for (constant_pool.entries.items) |constant, i| {
+            switch (constant) {
+                .methodref => |ref_info| {
+                    if (ref_info.class_index == class_index and ref_info.name_and_type_index == name_and_type_index) {
+                        ref_info_index_opt = @intCast(u16, i);
+                        break;
+                    }
+                },
+                else => continue,
+            }
+        }
+
+        const ref_info_index = ref_info_index_opt orelse ref_info_index: {
+            break :ref_info_index try addToConstantPool(constant_pool, .methodref, .{
+                .constant_pool = constant_pool,
+                .class_index = class_index,
+                .name_and_type_index = name_and_type_index,
+            });
+        };
+
+        return ref_info_index;
+    }
+
+    fn getFieldRef(constant_pool: *cf.ConstantPool, field_name: []const u8, descriptor: []const u8) !u16 {
+        var slash_index = std.mem.lastIndexOfScalar(u8, field_name, '/') orelse return error.MalformedName;
+        var class = field_name[0..slash_index];
+        var name = field_name[slash_index..];
+
+        var class_name_index = try addStringToConstantPool(constant_pool, class);
+        var field_name_index = try addStringToConstantPool(constant_pool, name);
+        var descriptor_index = try addStringToConstantPool(constant_pool, descriptor);
+
+        var class_index_opt: ?u16 = null;
+        var name_and_type_index_opt: ?u16 = null;
+
+        for (constant_pool.entries.items) |constant, i| {
+            switch (constant) {
+                .class => |class_data| {
+                    if (class_data.name_index == class_name_index) {
+                        class_index_opt = @intCast(u16, i);
+                    }
+                },
+                .name_and_type => |name_and_type| {
+                    if (name_and_type.name_index == field_name_index and name_and_type.descriptor_index == descriptor_index) {
+                        name_and_type_index_opt = @intCast(u16, i);
+                    }
+                },
+                else => continue,
+            }
+        }
+
+        const class_index = class_index_opt orelse class_index: {
+            break :class_index try addToConstantPool(constant_pool, .class, .{
+                .constant_pool = constant_pool,
+                .name_index = class_name_index,
+            });
+        };
+
+        const name_and_type_index = name_and_type_index_opt orelse name_and_type_index: {
+            break :name_and_type_index try addToConstantPool(constant_pool, .name_and_type, .{
+                .constant_pool = constant_pool,
+                .name_index = class_name_index,
+                .descriptor_index = descriptor_index,
+            });
+        };
+
+        var ref_info_index_opt: ?u16 = null;
+        for (constant_pool.entries.items) |constant, i| {
+            switch (constant) {
+                .fieldref => |ref_info| {
+                    if (ref_info.class_index == class_index and ref_info.name_and_type_index == name_and_type_index) {
+                        ref_info_index_opt = @intCast(u16, i);
+                        break;
+                    }
+                },
+                else => continue,
+            }
+        }
+
+        const ref_info_index = ref_info_index_opt orelse ref_info_index: {
+            break :ref_info_index try addToConstantPool(constant_pool, .methodref, .{
+                .constant_pool = constant_pool,
+                .class_index = class_index,
+                .name_and_type_index = name_and_type_index,
+            });
+        };
+
+        return ref_info_index;
+    }
+
     fn toClassFile(self: *Parser, allocator: std.mem.Allocator) !cf.ClassFile {
         if (!self.has_parsed) return error.ParsingNotComplete;
 
@@ -319,7 +455,27 @@ const Parser = struct {
                     .lload,
                     .lstore,
                     => |instr| @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr))),
-                    inline else => |instr| @unionInit(cf.bytecode.ops.Operation, @tagName(instr), {}),
+                    inline .anewarray,
+                    .invokenonvirtual,
+                    .invokestatic,
+                    .invokevirtual,
+                    => |instr| operation: {
+                        // TODO: create classinfo, refinfo, and nameandtypeinfo for each method/field
+                        // TODO: correctly route invokenonvirtual calls
+                        break :operation try getMethodRef(constant_pool, @field(instruction, @tagName(instr)));
+                    },
+                    inline .getfield,
+                    .getstatic,
+                    .putstatic,
+                    .putfield,
+                    => |instr| operation: {
+                        const field = @field(instruction, @tagName(instr));
+                        break :operation try getFieldRef(constant_pool, field.field_spec, field.descriptor);
+                    },
+                    inline else => |instr| operation: {
+                        @compileLog(instr);
+                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr)));
+                    },
                 };
                 _ = operation;
                 instruction.encode(code_writer);
@@ -537,7 +693,8 @@ const Parser = struct {
                 const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
                 try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), method_name));
             },
-            inline .ret, .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
+            inline //.ret,
+            .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
                 const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const index = try std.fmt.parseInt(u8, index_str, 10);
                 try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), index));
