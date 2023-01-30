@@ -196,18 +196,15 @@ const Parser = struct {
             } });
             break :index @intCast(u16, constant_pool.entries.items.len);
         } else get_or_put.value_ptr.*;
-        std.log.err("String \"{s}\" has index {}", .{ string, index });
         return index;
     }
 
     fn addToConstantPool(constant_pool: *cf.ConstantPool, comptime T: cf.ConstantPool.Tag, data: anytype) !u16 {
         try constant_pool.entries.append(constant_pool.allocator, @unionInit(cf.ConstantPool.Entry, @tagName(T), data));
-        std.log.err("{s} constant has index {}", .{ @tagName(T), constant_pool.entries.items.len });
         return @intCast(u16, constant_pool.entries.items.len);
     }
 
     fn getMethodRef(constant_pool: *cf.ConstantPool, method_name: []const u8) !u16 {
-        std.log.err("{s}, {}/{}", .{ method_name, constant_pool.entries.items.len, constant_pool.entries.capacity });
         var paren_index = std.mem.indexOfScalar(u8, method_name, '(') orelse return error.MalformedName;
         const class_and_function = method_name[0..paren_index];
         var slash_index = std.mem.lastIndexOfScalar(u8, class_and_function, '/') orelse return error.MalformedName;
@@ -222,9 +219,7 @@ const Parser = struct {
         var class_index_opt: ?u16 = null;
         var name_and_type_index_opt: ?u16 = null;
 
-        std.log.err("{*}, {}/{}", .{ constant_pool.entries.items, constant_pool.entries.items.len, constant_pool.entries.capacity });
         for (constant_pool.entries.items) |constant, i| {
-            std.log.err("constant {}", .{i});
             switch (constant) {
                 .class => |class_data| {
                     if (class_data.name_index == class_name_index) {
