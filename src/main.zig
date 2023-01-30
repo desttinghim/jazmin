@@ -156,6 +156,7 @@ fn tokenizeString(tok_iter: *std.mem.TokenIterator(u8)) ?[]const u8 {
 }
 
 const Parser = struct {
+    has_parsed: bool,
     allocator: std.mem.Allocator,
     source: ?[]const u8 = null,
     class_name: ?ClassName = null,
@@ -183,6 +184,10 @@ const Parser = struct {
         self.methods.clearAndFree(self.allocator);
     }
 
+    pub fn setSource(self: *Parser, name: []const u8) void {
+        self.source = name;
+    }
+
     pub fn parse(self: *Parser, buffer: []const u8) !void {
         var line_iter = std.mem.tokenize(u8, buffer, "\n");
 
@@ -207,6 +212,7 @@ const Parser = struct {
                 }
             }
         }
+        self.has_parsed = true;
     }
 
     fn parseDirective(self: *Parser, tok: []const u8, tok_iter: *std.mem.TokenIterator(u8)) !void {
