@@ -3,6 +3,10 @@
 Jazmin is a reimplemention of [jasmin][jasmin] in zig.
 Jasmin is an assembly language for the Java Virtual Machine.
 
+## Status
+
+Jazmin is a work in progress and is missing features. Notably, jazmin does not yet implement the `lookupswitch`, `tableswitch`, or `ldc_w` instructions. None of the Jasmin XT features have been implemented yet either.
+
 ## Dependencies
 
 - `zig` nightly (last tested on `0.11.0-dev.1302+d813cef42`)
