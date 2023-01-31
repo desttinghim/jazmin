@@ -27,7 +27,8 @@ pub fn main() !void {
     defer parser.deinit();
 
     try parser.parse(file_in);
-    parser.setSource(args[1]);
+    var source_name = std.fs.path.basename(args[1]);
+    parser.setSource(source_name);
 
     var class_file = try parser.toClassFile(alloc);
     defer class_file.deinit();
@@ -202,13 +203,14 @@ const Parser = struct {
     fn addStringToConstantPool(constant_pool: *cf.ConstantPool, string: []const u8) !u16 {
         var get_or_put = try constant_pool.utf8_entries_map.getOrPut(constant_pool.allocator, string);
         const index = if (!get_or_put.found_existing) index: {
-            get_or_put.value_ptr.* = @intCast(u16, constant_pool.entries.items.len + 1);
+            const len = constant_pool.entries.items.len + 1;
+            get_or_put.value_ptr.* = @intCast(u16, len);
             const bytes = try constant_pool.allocator.dupe(u8, string);
             try constant_pool.entries.append(constant_pool.allocator, .{ .utf8 = .{
                 .constant_pool = constant_pool,
                 .bytes = bytes,
             } });
-            break :index @intCast(u16, constant_pool.entries.items.len);
+            break :index @intCast(u16, len);
         } else get_or_put.value_ptr.*;
         return index;
     }
@@ -223,7 +225,7 @@ const Parser = struct {
         const class_and_function = method_name[0..paren_index];
         var slash_index = std.mem.lastIndexOfScalar(u8, class_and_function, '/') orelse return error.MalformedName;
         var class = method_name[0..slash_index];
-        var name = method_name[slash_index..paren_index];
+        var name = method_name[slash_index + 1 .. paren_index];
         var descriptor = method_name[paren_index..];
 
         var class_name_index = try addStringToConstantPool(constant_pool, class);
@@ -237,12 +239,12 @@ const Parser = struct {
             switch (constant) {
                 .class => |class_data| {
                     if (class_data.name_index == class_name_index) {
-                        class_index_opt = @intCast(u16, i);
+                        class_index_opt = @intCast(u16, i + 1);
                     }
                 },
                 .name_and_type => |name_and_type| {
                     if (name_and_type.name_index == method_name_index and name_and_type.descriptor_index == descriptor_index) {
-                        name_and_type_index_opt = @intCast(u16, i);
+                        name_and_type_index_opt = @intCast(u16, i + 1);
                     }
                 },
                 else => continue,
@@ -259,7 +261,7 @@ const Parser = struct {
         const name_and_type_index = name_and_type_index_opt orelse name_and_type_index: {
             break :name_and_type_index try addToConstantPool(constant_pool, .name_and_type, .{
                 .constant_pool = constant_pool,
-                .name_index = class_name_index,
+                .name_index = method_name_index,
                 .descriptor_index = descriptor_index,
             });
         };
@@ -269,7 +271,7 @@ const Parser = struct {
             switch (constant) {
                 .methodref => |ref_info| {
                     if (ref_info.class_index == class_index and ref_info.name_and_type_index == name_and_type_index) {
-                        ref_info_index_opt = @intCast(u16, i);
+                        ref_info_index_opt = @intCast(u16, i + 1);
                         break;
                     }
                 },
@@ -291,7 +293,7 @@ const Parser = struct {
     fn getFieldRef(constant_pool: *cf.ConstantPool, field_name: []const u8, descriptor: []const u8) !u16 {
         var slash_index = std.mem.lastIndexOfScalar(u8, field_name, '/') orelse return error.MalformedName;
         var class = field_name[0..slash_index];
-        var name = field_name[slash_index..];
+        var name = field_name[slash_index + 1 ..];
 
         var class_name_index = try addStringToConstantPool(constant_pool, class);
         var field_name_index = try addStringToConstantPool(constant_pool, name);
@@ -304,12 +306,12 @@ const Parser = struct {
             switch (constant) {
                 .class => |class_data| {
                     if (class_data.name_index == class_name_index) {
-                        class_index_opt = @intCast(u16, i);
+                        class_index_opt = @intCast(u16, i + 1);
                     }
                 },
                 .name_and_type => |name_and_type| {
                     if (name_and_type.name_index == field_name_index and name_and_type.descriptor_index == descriptor_index) {
-                        name_and_type_index_opt = @intCast(u16, i);
+                        name_and_type_index_opt = @intCast(u16, i + 1);
                     }
                 },
                 else => continue,
@@ -326,7 +328,7 @@ const Parser = struct {
         const name_and_type_index = name_and_type_index_opt orelse name_and_type_index: {
             break :name_and_type_index try addToConstantPool(constant_pool, .name_and_type, .{
                 .constant_pool = constant_pool,
-                .name_index = class_name_index,
+                .name_index = field_name_index,
                 .descriptor_index = descriptor_index,
             });
         };
@@ -336,7 +338,7 @@ const Parser = struct {
             switch (constant) {
                 .fieldref => |ref_info| {
                     if (ref_info.class_index == class_index and ref_info.name_and_type_index == name_and_type_index) {
-                        ref_info_index_opt = @intCast(u16, i);
+                        ref_info_index_opt = @intCast(u16, i + 1);
                         break;
                     }
                 },
@@ -591,7 +593,7 @@ const Parser = struct {
         // TODO: add attributes?
         var class = cf.ClassFile{
             .minor_version = 0,
-            .major_version = 0,
+            .major_version = 45,
             .constant_pool = constant_pool,
             .access_flags = self.class_name.?.accessor,
             .this_class = class_index,
