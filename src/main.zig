@@ -6,25 +6,17 @@ const InstructionType = @import("instruction.zig").InstructionType;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
-
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    try bw.flush(); // don't forget to flush!
 
     const alloc = gpa.allocator();
     const args = try std.process.argsAlloc(alloc);
 
     if (args.len < 3) {
         try stdout.print("Missing args\nUSAGE:\njazmin <input> <output>\nEXAMPLE:\njazmin MyClass.j MyClass.class", .{});
+        try bw.flush(); // don't forget to flush!
+        return;
     }
 
     const cwd = std.fs.cwd();
@@ -35,22 +27,17 @@ pub fn main() !void {
     defer parser.deinit();
 
     try parser.parse(file_in);
+    parser.setSource(args[1]);
 
     var class_file = try parser.toClassFile(alloc);
     defer class_file.deinit();
 
-    const file_out = try cwd.openFile(args[2], .{});
+    try stdout.print("Writing to {s}", .{args[2]});
+    const file_out = try cwd.createFile(args[2], .{});
     defer file_out.close();
 
     try class_file.encode(file_out.writer());
-
-    // var class = cf.ClassFile{
-    //     .major_version = 0,
-    //     .minor_version = 0,
-    //     .constant_pool = 0,
-    //     .constant_pool = try cf.ConstantPool.init(allocator, entry_count),
-    // };
-    // _ = class;
+    try bw.flush(); // don't forget to flush!
 }
 
 const ClassName = struct {
