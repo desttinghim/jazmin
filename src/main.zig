@@ -32,6 +32,14 @@ pub fn main() !void {
 
     var class_file = try parser.toClassFile(alloc);
     defer class_file.deinit();
+    for (class_file.constant_pool.entries.items) |entry, i| {
+        std.log.info("{}: {s}", .{ i, @tagName(entry) });
+        switch (entry) {
+            .utf8 => |value| std.log.info("\t{s}", .{value}),
+            .class => |value| std.log.info("\t{}", .{value.name_index}),
+            else => {},
+        }
+    }
 
     try stdout.print("Writing to {s}", .{args[2]});
     const file_out = try cwd.createFile(args[2], .{});
@@ -347,7 +355,7 @@ const Parser = struct {
         }
 
         const ref_info_index = ref_info_index_opt orelse ref_info_index: {
-            break :ref_info_index try addToConstantPool(constant_pool, .methodref, .{
+            break :ref_info_index try addToConstantPool(constant_pool, .fieldref, .{
                 .constant_pool = constant_pool,
                 .class_index = class_index,
                 .name_and_type_index = name_and_type_index,
@@ -418,6 +426,10 @@ const Parser = struct {
             .constant_pool = constant_pool,
             .source_file_index = source_index,
         } });
+
+        // Make sure Code and SourceFile are available as a value for the attribute to reference
+        _ = try addStringToConstantPool(constant_pool, "Code");
+        _ = try addStringToConstantPool(constant_pool, "SourceFile");
 
         // loop over interfaces and insert into the constant pool
         for (self.interfaces.items) |interface| {
@@ -548,8 +560,12 @@ const Parser = struct {
                     },
                     .ldc => operation: {
                         // TODO: add constant to pool and get index
-                        const constant = 0;
-                        break :operation .{ .ldc = constant };
+                        const utf8_constant = try addStringToConstantPool(constant_pool, instruction.ldc);
+                        const string_constant = try addToConstantPool(constant_pool, .string, .{
+                            .constant_pool = constant_pool,
+                            .string_index = utf8_constant,
+                        });
+                        break :operation .{ .ldc = @intCast(u8, string_constant) };
                     },
                     .ldc_w => operation: {
                         // TODO: add constant to pool and get index
@@ -570,8 +586,8 @@ const Parser = struct {
             var code_attribute = cf.attributes.CodeAttribute{
                 .allocator = allocator,
                 .constant_pool = constant_pool,
-                .max_stack = method.stack_limit orelse 0,
-                .max_locals = method.local_limit orelse 0,
+                .max_stack = method.stack_limit orelse 1,
+                .max_locals = method.local_limit orelse 1,
                 .code = code.moveToUnmanaged(),
                 .exception_table = exception_table,
                 .attributes = code_attributes,
