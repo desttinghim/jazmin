@@ -3,6 +3,8 @@ const cf = @import("cf");
 const Instruction = @import("instruction.zig").Instruction;
 const InstructionType = @import("instruction.zig").InstructionType;
 
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
@@ -17,6 +19,30 @@ pub fn main() !void {
     try stdout.print("Run `zig build test` to run the tests.\n", .{});
 
     try bw.flush(); // don't forget to flush!
+
+    const alloc = gpa.allocator();
+    const args = try std.process.argsAlloc(alloc);
+
+    if (args.len < 3) {
+        try stdout.print("Missing args\nUSAGE:\njazmin <input> <output>\nEXAMPLE:\njazmin MyClass.j MyClass.class", .{});
+    }
+
+    const cwd = std.fs.cwd();
+    const file_in = try cwd.readFileAlloc(alloc, args[1], 1024 * 1024 * 1024 * 1024);
+    defer alloc.free(file_in);
+
+    var parser = Parser.init(alloc);
+    defer parser.deinit();
+
+    try parser.parse(file_in);
+
+    var class_file = try parser.toClassFile(alloc);
+    defer class_file.deinit();
+
+    const file_out = try cwd.openFile(args[2], .{});
+    defer file_out.close();
+
+    try class_file.encode(file_out.writer());
 
     // var class = cf.ClassFile{
     //     .major_version = 0,
@@ -59,6 +85,7 @@ const ClassName = struct {
 const Interface = struct {
     name: []const u8,
 };
+
 const Field = struct {
     accessor: cf.FieldInfo.AccessFlags,
     name: []const u8,
