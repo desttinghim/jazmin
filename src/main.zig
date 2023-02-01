@@ -476,7 +476,7 @@ const Parser = struct {
                             inline .goto, .goto_w, .if_acmpeq, .if_acmpne, .if_icmpeq, .if_icmpge, .if_icmpgt, .if_icmple, .if_icmplt, .if_icmpne, .ifeq, .ifge, .ifgt, .ifle, .iflt, .ifne, .ifnonnull, .ifnull, .jsr, .jsr_w => |instr| {
                                 @field(instruction.*, @tagName(instr)) = @intCast(i16, offset);
                             },
-                            inline else => unreachable,
+                            inline else => |instr| @panic("Attempt to set offset on " ++ @tagName(instr) ++ " which does not take an offset parameter."),
                         }
                     }
                 }
@@ -548,7 +548,6 @@ const Parser = struct {
                             const method = &self.methods.items[self.methods.items.len - 1];
                             const index = method.instructions.items.len;
                             try method.labels.put(self.allocator, tok[0 .. tok.len - 1], index);
-                            std.log.info("{s} {}", .{ tok, index });
                         } else if (std.meta.stringToEnum(InstructionType, tok)) |instruction| {
                             try self.parseInstruction(instruction, &tok_iter);
                         } else {
