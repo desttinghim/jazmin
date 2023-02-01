@@ -1,7 +1,7 @@
 const std = @import("std");
 const cf = @import("cf");
-const Instruction = @import("instruction.zig").Instruction;
-const InstructionType = @import("instruction.zig").InstructionType;
+const Instruction = cf.bytecode.ops.Operation;
+const InstructionType = cf.bytecode.ops.Opcode;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
@@ -23,7 +23,7 @@ pub fn main() !void {
     const file_in = try cwd.readFileAlloc(alloc, args[1], 1024 * 1024 * 1024 * 1024);
     defer alloc.free(file_in);
 
-    var parser = Parser.init(alloc);
+    var parser = try Parser.init(alloc);
     defer parser.deinit();
 
     try parser.parse(file_in);
@@ -171,6 +171,7 @@ fn tokenizeString(tok_iter: *std.mem.TokenIterator(u8)) ?[]const u8 {
 
 const Parser = struct {
     allocator: std.mem.Allocator,
+    constant_pool: *cf.ConstantPool,
     source: ?[]const u8 = null,
     class_name: ?ClassName = null,
     super_class_name: ?ClassName = null,
@@ -180,9 +181,10 @@ const Parser = struct {
     is_parsing_method: bool = false,
     has_parsed: bool = false,
 
-    pub fn init(allocator: std.mem.Allocator) Parser {
+    pub fn init(allocator: std.mem.Allocator) !Parser {
         return Parser{
             .allocator = allocator,
+            .constant_pool = try cf.ConstantPool.init(allocator, 0),
             .interfaces = std.ArrayListUnmanaged(Interface){},
             .fields = std.ArrayListUnmanaged(Field){},
             .methods = std.ArrayListUnmanaged(Method){},
@@ -385,7 +387,7 @@ const Parser = struct {
         if (!self.has_parsed) return error.ParsingNotComplete;
 
         // Initialize variables needed for ClassFile struct
-        var constant_pool = try cf.ConstantPool.init(allocator, 0);
+        var constant_pool = self.constant_pool;
         var interfaces = std.ArrayList(u16).init(allocator);
         var fields = std.ArrayList(cf.FieldInfo).init(allocator);
         var methods = std.ArrayList(cf.MethodInfo).init(allocator);
@@ -457,118 +459,7 @@ const Parser = struct {
             var code = std.ArrayList(u8).init(allocator);
             const code_writer = code.writer();
             for (method.instructions.items) |instruction| {
-                var operation: cf.bytecode.ops.Operation = switch (@as(InstructionType, instruction)) {
-                    .bipush => .{ .bipush = instruction.bipush },
-                    .sipush => .{ .sipush = instruction.sipush },
-                    .iinc => .{ .iinc = .{
-                        .index = instruction.iinc.var_num,
-                        .@"const" = instruction.iinc.amount,
-                    } },
-                    inline .goto,
-                    .if_acmpeq,
-                    .if_acmpne,
-                    .if_icmpeq,
-                    .if_icmpge,
-                    .if_icmpgt,
-                    .if_icmple,
-                    .if_icmplt,
-                    .if_icmpne,
-                    .ifeq,
-                    .ifge,
-                    .ifgt,
-                    .ifle,
-                    .iflt,
-                    .ifne,
-                    .ifnonnull,
-                    .ifnull,
-                    .jsr,
-                    => |instr| operation: {
-                        const string = @field(instruction, @tagName(instr));
-                        const offset = std.fmt.parseInt(i16, string, 10) catch @intCast(i16, method.labels.get(string) orelse return error.UnknownLabel);
-                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), offset);
-                    },
-                    inline .goto_w, .jsr_w => |instr| operation: {
-                        const string = @field(instruction, @tagName(instr));
-                        const offset = std.fmt.parseInt(i32, string, 10) catch method.labels.get(string) orelse return error.UnknownLabel;
-                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), offset);
-                    },
-                    inline .aload,
-                    .astore,
-                    .dload,
-                    .dstore,
-                    .fload,
-                    .fstore,
-                    .iload,
-                    .istore,
-                    .lload,
-                    .lstore,
-                    => |instr| @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr))),
-                    inline .anewarray,
-                    .invokespecial,
-                    .invokestatic,
-                    .invokevirtual,
-                    => |instr| operation: {
-                        const ref = try getMethodRef(constant_pool, @field(instruction, @tagName(instr)));
-                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), ref);
-                    },
-                    inline .getfield,
-                    .getstatic,
-                    .putstatic,
-                    .putfield,
-                    => |instr| operation: {
-                        const field = @field(instruction, @tagName(instr));
-                        const ref = try getFieldRef(constant_pool, field.field_spec, field.descriptor);
-                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), ref);
-                    },
-                    inline .checkcast,
-                    .instanceof,
-                    .new,
-                    => |instr| operation: {
-                        const class = @field(instruction, @tagName(instr));
-                        const ref = try getClassRef(constant_pool, class);
-                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), ref);
-                    },
-                    .invokeinterface => operation: {
-                        const class = try getClassRef(constant_pool, instruction.invokeinterface.method_spec);
-                        break :operation .{ .invokeinterface = .{
-                            .indexbyte1 = @truncate(u8, class >> 8),
-                            .indexbyte2 = @truncate(u8, class),
-                            .count = instruction.invokeinterface.arg_count,
-                            .pad = 0,
-                        } };
-                    },
-                    .newarray => operation: {
-                        const array_type = std.meta.stringToEnum(cf.bytecode.ops.NewArrayParams, instruction.newarray) orelse return error.InvalidArrayType;
-                        break :operation .{ .newarray = array_type };
-                    },
-                    .multianewarray => operation: {
-                        const descriptor = try getClassRef(constant_pool, instruction.multianewarray.descriptor);
-                        break :operation .{ .multianewarray = .{
-                            .index = descriptor,
-                            .dimensions = instruction.multianewarray.num_dimensions,
-                        } };
-                    },
-                    .ldc => operation: {
-                        // TODO: add constant to pool and get index
-                        const utf8_constant = try addStringToConstantPool(constant_pool, instruction.ldc);
-                        const string_constant = try addToConstantPool(constant_pool, .string, .{
-                            .constant_pool = constant_pool,
-                            .string_index = utf8_constant,
-                        });
-                        break :operation .{ .ldc = @intCast(u8, string_constant) };
-                    },
-                    .ldc_w => operation: {
-                        // TODO: add constant to pool and get index
-                        const constant = 0;
-                        break :operation .{ .ldc_w = constant };
-                    },
-                    .lookupswitch, .tableswitch => unreachable,
-                    inline else => |instr| operation: {
-                        // @compileLog(instr);
-                        break :operation @unionInit(cf.bytecode.ops.Operation, @tagName(instr), @field(instruction, @tagName(instr)));
-                    },
-                };
-                try operation.encode(code_writer);
+                try instruction.encode(code_writer);
             }
             var exception_table = std.ArrayListUnmanaged(cf.attributes.ExceptionTableEntry){};
             var code_attributes = std.ArrayListUnmanaged(cf.attributes.AttributeInfo){};
@@ -713,40 +604,80 @@ const Parser = struct {
         }
     }
 
+    // const MethodSpec = struct {
+    //     class: []const u8,
+    //     method: []const u8,
+    //     descriptor: []const u8,
+    // };
+    // fn parseMethodSpec(combined: []const u8) !MethodSpec {
+    //     var paren_index = std.mem.indexOfScalar(u8, combined, '(') orelse return error.MalformedName;
+    //     const class_and_function = combined[0..paren_index];
+    //     var slash_index = std.mem.lastIndexOfScalar(u8, class_and_function, '/') orelse return error.MalformedName;
+    //     var class = combined[0..slash_index];
+    //     var name = combined[slash_index + 1 .. paren_index];
+    //     var descriptor = combined[paren_index..];
+    //     return MethodSpec{
+    //         .class = class,
+    //         .method = name,
+    //         .descriptor = descriptor,
+    //     };
+    // }
+
     fn parseInstruction(self: *Parser, instruction: InstructionType, tok_iter: *std.mem.TokenIterator(u8)) !void {
         std.debug.assert(self.methods.items.len > 0);
         const method = &self.methods.items[self.methods.items.len - 1];
         switch (instruction) {
             .invokeinterface => {
-                const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
-                const index = try std.fmt.parseInt(u8, index_str, 10);
+                const method_spec_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                // const method_spec = try parseMethodSpec(method_spec_str);
+                const method_index = try getMethodRef(self.constant_pool, method_spec_str);
+
+                const nargs_str = tok_iter.next() orelse return error.UnexpectedEnd;
+                const nargs = try std.fmt.parseInt(u8, nargs_str, 10);
+
                 try method.instructions.append(self.allocator, .{ .invokeinterface = .{
-                    .method_spec = method_name,
-                    .arg_count = index,
+                    .index = method_index,
+                    .count = nargs,
                 } });
             },
-            .ldc => {
+            inline .ldc, .ldc_w, .ldc2_w => |tag| {
                 const constant = tokenizeString(tok_iter) orelse tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, .{ .ldc = constant });
+                const utf8_constant = try addStringToConstantPool(self.constant_pool, constant);
+                const string_constant = try addToConstantPool(self.constant_pool, .string, .{
+                    .constant_pool = self.constant_pool,
+                    .string_index = utf8_constant,
+                });
+                try method.instructions.append(
+                    self.allocator,
+                    if (tag == .ldc) .{
+                        .ldc = @intCast(u8, string_constant),
+                    } else .{
+                        .ldc_w = string_constant,
+                    },
+                );
             },
             .iinc => {
                 const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const index = try std.fmt.parseInt(u16, index_str, 10);
+
                 const int_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const int = try std.fmt.parseInt(i16, int_str, 10);
+
                 try method.instructions.append(self.allocator, .{ .iinc = .{
-                    .var_num = index,
-                    .amount = int,
+                    .index = index,
+                    .@"const" = int,
                 } });
             },
             .multianewarray => {
                 const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
                 const dimensions_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const dimensions = try std.fmt.parseInt(u8, dimensions_str, 10);
+
+                const descriptor_index = try getClassRef(self.constant_pool, descriptor);
+
                 try method.instructions.append(self.allocator, .{ .multianewarray = .{
-                    .descriptor = descriptor,
-                    .num_dimensions = dimensions,
+                    .index = descriptor_index,
+                    .dimensions = dimensions,
                 } });
             },
             .bipush => {
@@ -759,30 +690,34 @@ const Parser = struct {
                 const int = try std.fmt.parseInt(i16, int_str, 10);
                 try method.instructions.append(self.allocator, @unionInit(Instruction, "sipush", int));
             },
-            inline .anewarray, .checkcast, .instanceof, .new, .newarray => |instr| {
-                // .newarray technically takes a type and not a class, but both are strings in this case.
-                // TODO: parse type passed to newarray
+            .newarray => {
+                const type_name = tok_iter.next() orelse return error.UnexpectedEnd;
+                const array_type = std.meta.stringToEnum(cf.bytecode.ops.NewArrayParams, type_name) orelse return error.InvalidArrayType;
+                try method.instructions.append(self.allocator, .{ .newarray = array_type });
+            },
+            .lookupswitch, .tableswitch, .invokedynamic => unreachable,
+            inline .anewarray, .checkcast, .instanceof, .new => |instr| {
                 const class_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), class_name));
+                const class_index = try getClassRef(self.constant_pool, class_name);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), class_index));
             },
             inline .goto, .goto_w, .if_acmpeq, .if_acmpne, .if_icmpeq, .if_icmpge, .if_icmpgt, .if_icmple, .if_icmplt, .if_icmpne, .ifeq, .ifge, .ifgt, .ifle, .iflt, .ifne, .ifnonnull, .ifnull, .jsr, .jsr_w => |instr| {
                 const label = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), label));
+                const offset = std.fmt.parseInt(i16, label, 10) catch @intCast(i16, method.labels.get(label) orelse return error.UnknownLabel);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), offset));
             },
             inline .getfield, .getstatic, .putfield, .putstatic => |instr| {
                 const field = tok_iter.next() orelse return error.UnexpectedEnd;
                 const descriptor = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), .{
-                    .field_spec = field,
-                    .descriptor = descriptor,
-                }));
+                const ref = try getFieldRef(self.constant_pool, field, descriptor);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), ref));
             },
             inline .invokespecial, .invokevirtual, .invokestatic => |instr| {
                 const method_name = tok_iter.next() orelse return error.UnexpectedEnd;
-                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), method_name));
+                const ref = try getMethodRef(self.constant_pool, method_name);
+                try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), ref));
             },
-            inline //.ret,
-            .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
+            inline .aload, .astore, .dload, .dstore, .fload, .fstore, .iload, .istore, .lload, .lstore => |instr| {
                 const index_str = tok_iter.next() orelse return error.UnexpectedEnd;
                 const index = try std.fmt.parseInt(u8, index_str, 10);
                 try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), index));
@@ -816,7 +751,7 @@ test "header" {
         \\.class public MyClass
         \\.super java/lang/Object
     ;
-    var parser = Parser.init(std.testing.allocator);
+    var parser = try Parser.init(std.testing.allocator);
     defer parser.deinit();
 
     try parser.parse(test_bytes);
@@ -834,7 +769,7 @@ test "comment" {
         \\; bleep bloop .source
         \\
     ;
-    var parser = Parser.init(std.testing.allocator);
+    var parser = try Parser.init(std.testing.allocator);
     defer parser.deinit();
 
     try parser.parse(test_bytes);
@@ -851,7 +786,7 @@ test "interface" {
         \\.implements Edible
         \\.implements java/lang/Throwable
     ;
-    var parser = Parser.init(std.testing.allocator);
+    var parser = try Parser.init(std.testing.allocator);
     defer parser.deinit();
 
     try parser.parse(test_bytes);
@@ -869,7 +804,7 @@ test "fields" {
         \\.field public bar I
         \\.field public static final PI F = 3.14
     ;
-    var parser = Parser.init(std.testing.allocator);
+    var parser = try Parser.init(std.testing.allocator);
     defer parser.deinit();
 
     try parser.parse(test_bytes);
@@ -887,7 +822,7 @@ test "methods" {
         \\.method abstract foo()V
         \\.end method
     ;
-    var parser = Parser.init(std.testing.allocator);
+    var parser = try Parser.init(std.testing.allocator);
     defer parser.deinit();
 
     try parser.parse(test_bytes);
@@ -918,7 +853,7 @@ test "Hello World" {
         \\    return
         \\.end method
     ;
-    var parser = Parser.init(std.testing.allocator);
+    var parser = try Parser.init(std.testing.allocator);
     defer parser.deinit();
 
     try parser.parse(test_bytes);
