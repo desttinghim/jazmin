@@ -550,6 +550,8 @@ const Parser = struct {
                             try method.labels.put(self.allocator, tok[0 .. tok.len - 1], index);
                         } else if (std.meta.stringToEnum(InstructionType, tok)) |instruction| {
                             try self.parseInstruction(instruction, &tok_iter);
+                        } else if (std.mem.eql(u8, tok, "invokenonvirtual")) {
+                            try self.parseInstruction(.invokespecial, &tok_iter);
                         } else {
                             std.log.err("Found {s}", .{tok});
                             return error.InvalidFile;
