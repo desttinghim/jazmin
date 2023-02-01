@@ -122,7 +122,9 @@ const Method = struct {
     stack_limit: ?u16 = null,
     local_limit: ?u16 = null,
     instructions: std.ArrayListUnmanaged(Instruction),
-    labels: std.StringHashMapUnmanaged(i32),
+    labels: std.StringHashMapUnmanaged(usize),
+    fixups: std.AutoHashMapUnmanaged(usize, []const u8),
+
     pub fn parse(token_iterator: *std.mem.TokenIterator(u8)) !Method {
         var access = cf.MethodInfo.AccessFlags{};
         var next = token_iterator.next();
@@ -152,12 +154,15 @@ const Method = struct {
             .accessor = access,
             .name = name,
             .instructions = std.ArrayListUnmanaged(Instruction){},
-            .labels = std.StringHashMapUnmanaged(i32){},
+            .labels = std.StringHashMapUnmanaged(usize){},
+            .fixups = std.AutoHashMapUnmanaged(usize, []const u8){},
         };
     }
+
     pub fn deinit(self: *Method, allocator: std.mem.Allocator) void {
         self.instructions.clearAndFree(allocator);
         self.labels.clearAndFree(allocator);
+        self.fixups.clearAndFree(allocator);
     }
 };
 
@@ -198,6 +203,7 @@ const Parser = struct {
             method.deinit(self.allocator);
         }
         self.methods.clearAndFree(self.allocator);
+        self.constant_pool.deinit();
     }
 
     fn addStringToConstantPool(constant_pool: *cf.ConstantPool, string: []const u8) !u16 {
@@ -458,7 +464,22 @@ const Parser = struct {
             // Convert bytecode
             var code = std.ArrayList(u8).init(allocator);
             const code_writer = code.writer();
-            for (method.instructions.items) |instruction| {
+            for (method.instructions.items) |*instruction, i| {
+                if (method.fixups.get(i)) |label| {
+                    if (method.labels.get(label)) |new_index| {
+                        var sum: usize = 0;
+                        for (method.instructions.items[new_index .. i - 1]) |op| {
+                            sum += op.sizeOf();
+                        }
+                        const offset = -(@intCast(i16, sum - 1));
+                        switch (@as(InstructionType, instruction.*)) {
+                            inline .goto, .goto_w, .if_acmpeq, .if_acmpne, .if_icmpeq, .if_icmpge, .if_icmpgt, .if_icmple, .if_icmplt, .if_icmpne, .ifeq, .ifge, .ifgt, .ifle, .iflt, .ifne, .ifnonnull, .ifnull, .jsr, .jsr_w => |instr| {
+                                @field(instruction.*, @tagName(instr)) = @intCast(i16, offset);
+                            },
+                            inline else => unreachable,
+                        }
+                    }
+                }
                 try instruction.encode(code_writer);
             }
             var exception_table = std.ArrayListUnmanaged(cf.attributes.ExceptionTableEntry){};
@@ -500,6 +521,7 @@ const Parser = struct {
             .methods = methods,
             .attributes = attributes,
         };
+        self.constant_pool = try cf.ConstantPool.init(self.allocator, 0);
         return class;
     }
 
@@ -518,14 +540,15 @@ const Parser = struct {
                     '.' => try self.parseDirective(tok, &tok_iter),
                     else => {
                         if (tok[tok.len - 1] == ':' and self.is_parsing_method) {
-                            std.log.info("Found label {s}", .{tok});
                             if (!self.is_parsing_method) {
                                 std.debug.print("Method directive used outside of method declaration\n", .{});
                                 return error.UnexpectedMethodDirective;
                             }
                             std.debug.assert(self.methods.items.len > 0);
                             const method = &self.methods.items[self.methods.items.len - 1];
-                            try method.labels.put(self.allocator, tok[0 .. tok.len - 1], @intCast(i32, method.instructions.items.len));
+                            const index = method.instructions.items.len;
+                            try method.labels.put(self.allocator, tok[0 .. tok.len - 1], index);
+                            std.log.info("{s} {}", .{ tok, index });
                         } else if (std.meta.stringToEnum(InstructionType, tok)) |instruction| {
                             try self.parseInstruction(instruction, &tok_iter);
                         } else {
@@ -585,7 +608,7 @@ const Parser = struct {
                         const limit = tok_iter.next() orelse return error.UnexpectedEnd;
                         if (std.mem.eql(u8, what, "stack")) {
                             method.stack_limit = try std.fmt.parseInt(u16, limit, 10);
-                        } else if (std.mem.eql(u8, what, "local")) {
+                        } else if (std.mem.eql(u8, what, "locals")) {
                             method.local_limit = try std.fmt.parseInt(u16, limit, 10);
                         } else {
                             return error.InvalidLimit;
@@ -703,7 +726,12 @@ const Parser = struct {
             },
             inline .goto, .goto_w, .if_acmpeq, .if_acmpne, .if_icmpeq, .if_icmpge, .if_icmpgt, .if_icmple, .if_icmplt, .if_icmpne, .ifeq, .ifge, .ifgt, .ifle, .iflt, .ifne, .ifnonnull, .ifnull, .jsr, .jsr_w => |instr| {
                 const label = tok_iter.next() orelse return error.UnexpectedEnd;
-                const offset = std.fmt.parseInt(i16, label, 10) catch @intCast(i16, method.labels.get(label) orelse return error.UnknownLabel);
+                const new_index = method.instructions.items.len;
+                const offset = std.fmt.parseInt(i16, label, 10) catch offset: {
+                    // If an offset wasn't used, initialize the offset to 0 and add to fixups
+                    try method.fixups.put(self.allocator, new_index, label);
+                    break :offset 0;
+                };
                 try method.instructions.append(self.allocator, @unionInit(Instruction, @tagName(instr), offset));
             },
             inline .getfield, .getstatic, .putfield, .putstatic => |instr| {
