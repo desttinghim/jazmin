@@ -32,21 +32,11 @@ pub fn main() !void {
 
     var class_file = try parser.toClassFile(alloc);
     defer class_file.deinit();
-    for (class_file.constant_pool.entries.items) |entry, i| {
-        std.log.info("{}: {s}", .{ i, @tagName(entry) });
-        switch (entry) {
-            .utf8 => |value| std.log.info("\t{s}", .{value}),
-            .class => |value| std.log.info("\t{}", .{value.name_index}),
-            else => {},
-        }
-    }
 
-    try stdout.print("Writing to {s}", .{args[2]});
     const file_out = try cwd.createFile(args[2], .{});
     defer file_out.close();
 
     try class_file.encode(file_out.writer());
-    try bw.flush(); // don't forget to flush!
 }
 
 const ClassName = struct {
@@ -646,7 +636,6 @@ const Parser = struct {
                             const method = &self.methods.items[self.methods.items.len - 1];
                             try method.labels.put(self.allocator, tok[0 .. tok.len - 1], @intCast(i32, method.instructions.items.len));
                         } else if (std.meta.stringToEnum(InstructionType, tok)) |instruction| {
-                            std.log.info("Found instruction {}", .{instruction});
                             try self.parseInstruction(instruction, &tok_iter);
                         } else {
                             std.log.err("Found {s}", .{tok});
@@ -710,7 +699,6 @@ const Parser = struct {
                         } else {
                             return error.InvalidLimit;
                         }
-                        std.debug.print("{s} limit set to {s}\n", .{ what, limit });
                     },
                     .line,
                     .@"var",
