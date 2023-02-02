@@ -185,6 +185,8 @@ const Parser = struct {
     methods: std.ArrayListUnmanaged(Method),
     is_parsing_method: bool = false,
     has_parsed: bool = false,
+    major_version: ?u16 = null,
+    minor_version: ?u16 = null,
 
     pub fn init(allocator: std.mem.Allocator) !Parser {
         return Parser{
@@ -510,8 +512,8 @@ const Parser = struct {
 
         // TODO: add attributes?
         var class = cf.ClassFile{
-            .minor_version = 0,
-            .major_version = 45,
+            .minor_version = self.minor_version orelse 0,
+            .major_version = self.major_version orelse 55,
             .constant_pool = constant_pool,
             .access_flags = self.class_name.?.accessor,
             .this_class = class_index,
@@ -596,6 +598,14 @@ const Parser = struct {
                 std.debug.assert(std.mem.eql(u8, end_what, "method")); // TODO: is .end used for anything other than methods?
                 self.is_parsing_method = false;
             },
+            .bytecode => {
+                const version = tok_iter.next() orelse return error.UnexpectedEnd;
+                const major = std.mem.sliceTo(version, '.');
+                const minor = version[major.len + 1 ..];
+                self.major_version = try std.fmt.parseInt(u16, major, 10);
+                self.minor_version = try std.fmt.parseInt(u16, minor, 10);
+            },
+            inline .debug, .enclosing, .signature, .inner, .attribute, .annotation, .stack, .deprecated => |instr| @panic("Directive " ++ @tagName(instr) ++ " is unimplemented"),
             inline .limit, .line, .@"var", .throws, .@"catch" => |method_directive| {
                 if (!self.is_parsing_method) {
                     std.debug.print("Method directive used outside of method declaration\n", .{});
@@ -627,25 +637,6 @@ const Parser = struct {
             },
         }
     }
-
-    // const MethodSpec = struct {
-    //     class: []const u8,
-    //     method: []const u8,
-    //     descriptor: []const u8,
-    // };
-    // fn parseMethodSpec(combined: []const u8) !MethodSpec {
-    //     var paren_index = std.mem.indexOfScalar(u8, combined, '(') orelse return error.MalformedName;
-    //     const class_and_function = combined[0..paren_index];
-    //     var slash_index = std.mem.lastIndexOfScalar(u8, class_and_function, '/') orelse return error.MalformedName;
-    //     var class = combined[0..slash_index];
-    //     var name = combined[slash_index + 1 .. paren_index];
-    //     var descriptor = combined[paren_index..];
-    //     return MethodSpec{
-    //         .class = class,
-    //         .method = name,
-    //         .descriptor = descriptor,
-    //     };
-    // }
 
     fn parseInstruction(self: *Parser, instruction: InstructionType, tok_iter: *std.mem.TokenIterator(u8)) !void {
         std.debug.assert(self.methods.items.len > 0);
@@ -772,6 +763,17 @@ const DirectiveType = enum {
     super,
     throws,
     @"var",
+
+    // Jasmin XT
+    bytecode,
+    debug,
+    enclosing,
+    signature,
+    inner,
+    attribute,
+    annotation,
+    stack,
+    deprecated,
 };
 
 test "header" {
