@@ -1,0 +1,10 @@
+.{
+    .name = "jazmin",
+    .version = "0.0.0",
+    .dependencies = .{
+        .cf = .{
+            .url = "https://github.com/andrewrk/cf/archive/f0186d6295452781755fe6d4078f0f2c57b27777.tar.gz",
+            .hash = "122055c896d3aa710bc60e95e3ee4ce6ac61c28eb0425d85c19292d667d25c74f132",
+        },
+    },
+}
